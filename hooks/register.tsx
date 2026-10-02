@@ -86,6 +86,7 @@ const prefs = atom({ plugin: 'garden-claude', key: 'prefs' } as const, { languag
 const detected = atom({ plugin: 'garden-claude', key: 'detected' } as const, { language: 'en', timeZone: 'UTC' })
 const weather = atom({ plugin: 'garden-claude', key: 'weather' } as const, null)
 const started = atom({ plugin: 'garden-claude', key: 'started' } as const, false)
+const choring = atom({ plugin: 'garden-claude', key: 'choring' } as const, false)
 
 const OLD_GARDEN_KEY = 'garden'
 const COINS_KEY = 'coins'
@@ -105,7 +106,8 @@ const GOLD = '#f2c84b'
 const BLUE = '#5b8de8'
 const DIM_GOLD = '#b8963a'
 const TITLE = 'Garden Claude '
-const MAX_QUEUED = 16
+const CHORE_HOLD_FRAMES = 8
+const CHORE_MAX_FRAMES = 50
 
 const START_X = 10
 
@@ -137,7 +139,10 @@ let lastPoll = 0
 let clockNow = 0
 let notices: string[] = []
 let starting: Promise<void> | undefined
-let queued = 0
+let isMidChore = false
+let wasOnDuty: boolean | undefined
+let choreKey: string | undefined
+let choreFrame = 0
 let queue: Promise<unknown> = Promise.resolve()
 const otherX = new Map<string, number>()
 const otherFacing = new Map<string, number>()
@@ -197,7 +202,7 @@ const isChoring = (job: Job, isBusy: boolean): boolean => isBusy && job.kind !==
 const goalsOf = (view: View): number[] => {
   const everyone = [
     ...view.others.map(other => ({ id: other.id, job: other.job, isBusy: isBusy(other), pace: paceOf(other.id, keyOf(other)), x: otherX.get(other.id) ?? START_X })),
-    { id: myId ?? '', job: view.job, isBusy: isWorking, pace: paceOf(myId ?? '', view.jobKey), x: claudeX ?? START_X },
+    { id: myId ?? '', job: view.job, isBusy: isOnDuty(), pace: paceOf(myId ?? '', view.jobKey), x: claudeX ?? START_X },
   ]
   return spreadGoals(
     everyone.map(claude => ({
@@ -239,7 +244,7 @@ const sceneOf = (view: View) => {
         facing,
         accessory: view.accessory,
         job: view.job,
-        isWorking,
+        isWorking: isOnDuty(),
         isCarrying: mine.isCarrying,
         settled: settledOf(mine),
         phase: phaseOf(myId ?? ''),
@@ -255,6 +260,11 @@ const sceneOf = (view: View) => {
 async function tick($: EngineInterface) {
   frame += 1
   clockNow += FRAME_MS
+  const busy = isOnDuty()
+  if (wasOnDuty !== busy) {
+    wasOnDuty = busy
+    await update($, choring, () => busy)
+  }
   if (!shown || site === undefined || claudeX === undefined) return
   const mine = paceOf(myId ?? '', shown.jobKey)
   const goals = goalsOf(shown)
@@ -263,9 +273,9 @@ async function tick($: EngineInterface) {
     facing = Math.sign(target - claudeX)
     claudeX = walk(claudeX, target)
   } else {
-    facing = isWorking ? 1 : 0
+    facing = busy ? 1 : 0
   }
-  paces.set(myId ?? '', stepPace(mine, shown.job, isWorking, claudeX, frame, shown.width))
+  paces.set(myId ?? '', stepPace(mine, shown.job, busy, claudeX, frame, shown.width))
   for (const [i, other] of shown.others.entries()) {
     const pace = paceOf(other.id, keyOf(other))
     const x = otherX.get(other.id) ?? START_X
@@ -274,7 +284,8 @@ async function tick($: EngineInterface) {
     otherX.set(other.id, walk(x, goal))
     paces.set(other.id, stepPace(pace, other.job, isBusy(other), walk(x, goal), frame, shown.width))
   }
-  await $.ui.blit({ requestId: site, key: RASTER, cells: sceneCells(sceneOf(shown)) })
+  const { deny } = await $.ui.blit({ requestId: site, key: RASTER, cells: sceneCells(sceneOf(shown)) }).catch((error: unknown) => ({ deny: String(error) }))
+  if (deny !== undefined) shown = undefined
 }
 
 function startTimers($: EngineInterface) {
@@ -738,6 +749,31 @@ async function markAway($: EngineInterface, code: string, id: string) {
   if (saved && memberOf(saved, id)) await $.store.set(roomKey(code), withMember(saved, id, member => ({ ...member, away: { since: now } })))
 }
 
+const isChoreDone = (): boolean => {
+  if (!shown) return true
+  if (frame - choreFrame >= CHORE_MAX_FRAMES) return true
+  if (shown.jobKey === choreKey) return false
+  const pace = paceOf(myId ?? '', shown.jobKey)
+  return shown.job.kind === 'resting' || (pace.arrivedAt !== null && frame - pace.arrivedAt >= CHORE_HOLD_FRAMES)
+}
+
+const isOnDuty = (): boolean => isWorking || !isChoreDone()
+
+async function doChore($: EngineInterface) {
+  startTimers($)
+  if (isMidChore || !isChoreDone()) return
+  isMidChore = true
+  choreKey = shown?.jobKey
+  choreFrame = frame
+  try {
+    await serially(() => ensureStarted($).then(() => choreOnce($)))
+  } catch {
+    choreKey = undefined
+  } finally {
+    isMidChore = false
+  }
+}
+
 async function choreOnce($: EngineInterface) {
   const condition = await conditionNow($)
   const id = await idNow($)
@@ -850,24 +886,20 @@ export const register: Register = on => {
     return yield* next(e)
   })
 
-  on('turn.start', ($, e, next) => {
-    startTimers($)
-
+  on('tool.call', async ($, e, next) => {
+    await doChore($)
     return next(e)
   })
 
-  on('tool.call', async ($, e, next) => {
-    if (queued < MAX_QUEUED) {
-      queued += 1
-      await serially(() => ensureStarted($).then(() => choreOnce($)))
-        .finally(() => {
-          queued -= 1
-        })
-        .catch(ignore)
-    }
-    startTimers($)
-
+  on('turn.start', async ($, e, next) => {
+    await doChore($)
     return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && (e.reason === 'answer' || e.reason === 'refusal')) await doChore($)
+    return result
   })
 
   on('ui.render', { component: 'Pane', requestId: LANGUAGE_PANE }, async ($, e) => {
@@ -947,6 +979,7 @@ export const register: Register = on => {
     const condition = sky?.condition ?? null
     const isNight = sky?.isNight ?? false
     isWorking = e.props.isWorking
+    const isBusyNow = isWorking || (await read($, choring))
     const isTerminal = e.surface === 'terminal'
     const columns = e.props.bodyColumns
     const layout = layoutFor(columns, e.props.maxRows, isTerminal, stats)
@@ -973,7 +1006,7 @@ export const register: Register = on => {
     }
 
     const place = city ? [city.names[language], condition ? (isNight && condition === 'sunny' ? strings.clearNight : strings.weather[condition]) : null].filter(Boolean).join(' ') : ''
-    const myChore = doingText(strings, myJob, isWorking)
+    const myChore = doingText(strings, myJob, isBusyNow)
 
     const badge: Badge = (() => {
       if (!current) return { text: '', color: null }
@@ -1013,7 +1046,7 @@ export const register: Register = on => {
           const isMine = member.id === id
           const label = memberName(strings, member, current)
           const chore = isPresent(member, now, heardSince)
-            ? doingText(strings, member.job, isMine ? isWorking : now - member.jobAt <= WORKING_MS)
+            ? doingText(strings, member.job, isMine ? isBusyNow : now - member.jobAt <= WORKING_MS)
             : strings.away
           const fitted = fitCaption(
             [

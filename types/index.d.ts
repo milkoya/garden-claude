@@ -74,6 +74,7 @@ declare module 'claude-code' {
       detected: Detected
       weather: Weather | null
       started: boolean
+      choring: boolean
     }
   }
 }

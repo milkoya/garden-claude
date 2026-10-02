@@ -454,6 +454,37 @@ describe('the band', () => {
     expect((await band.find({ type: 'Text', text: /coins/ }))?.text).toContain('planting ')
     await band.unmount()
   })
+
+  test('skips a chore that comes in while Claude is still on the last one', async ($, on) => {
+    const clock = mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on)
+    on('session.id', () => ({ value: 'session-a' }))
+    on('ui.blit', () => ({ value: {} }))
+    on('tool.call', () => ({ result: 'ok', text: 'ok' }))
+    const first = step(farm())
+    const second = step(first)
+    const doing = (state: Farm) => doingText(STRINGS.en, state.job, true)
+    expect(doing(first)).not.toBe(doing(second))
+
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const caption = async () => (await band.find({ type: 'Text', text: /coins/ }))?.text ?? ''
+    for (const file of ['a.md', 'b.md', 'c.md', 'd.md']) await $.tool.call({ tool: 'Read', file_path: file })
+    expect(await caption()).toContain(doing(first))
+    await clock.advance(1_000)
+    await $.tool.call({ tool: 'Read', file_path: 'e.md' })
+    expect(await caption()).toContain(doing(first))
+    await clock.advance(20_000)
+    expect(await caption()).toContain(doing(first))
+
+    await $.tool.call({ tool: 'Read', file_path: 'f.md' })
+    expect(await caption()).toContain(doing(second))
+
+    await band.redraw({ ...BAND.props, isWorking: false })
+    expect(await caption()).toContain(doing(second))
+    await clock.advance(20_000)
+    expect(await caption()).toContain(STRINGS.en.resting)
+    await band.unmount()
+  })
 })
 
 describe('languages', () => {
@@ -746,6 +777,7 @@ describe('starting a session', () => {
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect(await band.find({ type: 'Text', text: /57 coins/ })).toBeDefined()
     await band.unmount()
+    await clock.advance(200)
 
     store.set('coins', 100)
     for (let i = 0; i < 200 && store.get('coins') === 100; i += 1) await $.tool.call({ tool: 'Read', file_path: 'a.md' })
@@ -1162,11 +1194,28 @@ describe('coins', () => {
     expect(store.has('garden')).toBe(false)
   })
 
-  test('pays each sale once even when tools run in parallel', async ($, on) => {
+  test('does one chore for a burst of parallel tool calls and pays each sale once', async ($, on) => {
     const { store } = coinWorld(on)
     await $.session.start(START)
-    for (let batch = 0; batch < 4; batch += 1) {
-      await Promise.all(Array.from({ length: 12 }, (_, i) => $.tool.call({ tool: 'Read', file_path: `${batch}-${i}.md` })))
+    for (let batch = 0; batch < 48; batch += 1) {
+      await Promise.all(Array.from({ length: 4 }, (_, i) => $.tool.call({ tool: 'Read', file_path: `${batch}-${i}.md` })))
+    }
+    let expected = farm()
+    for (let i = 0; i < 48; i += 1) expected = step(expected)
+    expect(expected.coins > 0).toBe(true)
+    expect(store.get('coins') ?? 0).toBe(expected.coins)
+  })
+
+  test('does a chore when a reply starts and when it ends, even with no tool calls', async ($, on) => {
+    const { store } = coinWorld(on)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    await $.session.start(START)
+    for (let i = 0; i < 24; i += 1) {
+      await $.turn.start({ text: 'hi', turnId: `turn-${i}` })
+      for (const n of [1, 2]) await $.turn.complete({ answer: '', durationMs: 1000, isAborted: true, turnId: `stopped-${i}-${n}`, reason: 'aborted' })
+      for (const n of [1, 2, 3]) await $.turn.complete({ answer: 'done', durationMs: 1000, isAborted: false, turnId: `helper-${i}-${n}`, reason: 'answer', agentId: 'agent-1' })
+      await $.turn.complete({ answer: 'hello', durationMs: 1000, isAborted: false, turnId: `turn-${i}`, reason: 'answer' })
     }
     let expected = farm()
     for (let i = 0; i < 48; i += 1) expected = step(expected)
@@ -1193,7 +1242,10 @@ describe('coins', () => {
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect((await band.find({ type: 'Text', text: /coins/ }))?.text).not.toContain('↑')
 
-    for (let i = 0; i < 200 && store.get('coins') === 900; i += 1) await $.tool.call({ tool: 'Read', file_path: `${i}.md` })
+    for (let i = 0; i < 200 && store.get('coins') === 900; i += 1) {
+      await $.tool.call({ tool: 'Read', file_path: `${i}.md` })
+      await clock.advance(10_000)
+    }
     const earned = (store.get('coins') as number) - 900
     expect(earned > 0).toBe(true)
     expect(store.get('today')).toEqual({ day, coins: earned })

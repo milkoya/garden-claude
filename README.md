@@ -2,7 +2,7 @@
 
 A tiny pixel-art Claude who keeps a flower garden right above your Claude Code prompt.
 
-Every time Claude uses a tool while helping you, it does a little garden chore too. You write code; Claude grows flowers. 🌱
+Every time Claude replies or uses a tool while helping you, it does a little garden chore too. You write code; Claude grows flowers. 🌱
 
 ![Garden Claude planting, watering, picking flowers, filling the basket and selling them](docs/garden.gif)
 
@@ -150,7 +150,7 @@ Start a new Claude Code session and your garden appears above the prompt.
 ### Good to know
 
 - Garden Claude is built on Claude Code's **function hooks**, an early-access feature that's still rolling out. If your Claude Code doesn't load it yet, it will once the feature reaches you.
-- The pixel art draws in the **terminal**. The desktop app shows the caption instead, plus a line per Claude in a room.
+- Garden Claude runs in the **Claude Code CLI** in your terminal.
 - It fits itself to your window:
   - **87+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
   - **56–86 columns:** the garden with a one-line stats bar underneath
