@@ -1,4 +1,4 @@
-import type { Garden, Job, Plot } from '../types'
+import type { Condition, Garden, Job, Plot } from '../types'
 
 export const HOUR = 3_600_000
 export const PLOT_COUNT = 5
@@ -31,7 +31,7 @@ export const freshGarden = (): Garden => ({
   basket: [],
   coins: 0,
   planted: 0,
-  job: { kind: 'resting', plot: 0, label: 'waiting for work' },
+  job: { kind: 'resting', plot: 0, flower: 0, count: 0, earned: 0 },
 })
 
 export const isGarden = (value: unknown): value is Garden => {
@@ -46,6 +46,12 @@ export const isGarden = (value: unknown): value is Garden => {
     typeof garden.planted === 'number' &&
     typeof garden.job === 'object'
   )
+}
+
+export const loadGarden = (saved: unknown): Garden | null => {
+  if (!isGarden(saved)) return null
+  const job = saved.job as Partial<Job>
+  return typeof job.flower === 'number' ? saved : { ...saved, job: freshGarden().job }
 }
 
 export const scramble = (n: number): number => {
@@ -66,7 +72,13 @@ export const accessoryFor = (hour: number): number => {
 const withPlot = (plots: Plot[], index: number, plot: Plot): Plot[] =>
   plots.map((one, i) => (i === index ? plot : one))
 
-const job = (kind: Job['kind'], plot: number, label: string): Job => ({ kind, plot, label })
+const job = (kind: Job['kind'], plot: number, flower = 0, count = 0, earned = 0): Job => ({
+  kind,
+  plot,
+  flower,
+  count,
+  earned,
+})
 
 export const work = (garden: Garden): Garden => {
   const { plots, basket } = garden
@@ -77,7 +89,7 @@ export const work = (garden: Garden): Garden => {
       ...garden,
       basket: [],
       coins: garden.coins + earned,
-      job: job('selling', -1, `selling ${basket.length} flowers for ${earned} coins`),
+      job: job('selling', -1, 0, basket.length, earned),
     }
   }
 
@@ -88,7 +100,7 @@ export const work = (garden: Garden): Garden => {
       ...garden,
       plots: withPlot(plots, ripe, { stage: 0, kind }),
       basket: [...basket, kind],
-      job: job('harvesting', ripe, `picking a ${flowerOf(kind).name}`),
+      job: job('harvesting', ripe, kind),
     }
   }
 
@@ -99,7 +111,7 @@ export const work = (garden: Garden): Garden => {
       ...garden,
       plots: withPlot(plots, empty, { stage: 1, kind }),
       planted: garden.planted + 1,
-      job: job('planting', empty, `planting a ${flowerOf(kind).name} seed`),
+      job: job('planting', empty, kind),
     }
   }
 
@@ -111,7 +123,7 @@ export const work = (garden: Garden): Garden => {
   return {
     ...garden,
     plots: withPlot(plots, thirsty, { ...plot, stage: plot.stage + 1 }),
-    job: job('watering', thirsty, `watering the ${flowerOf(plot.kind).name}`),
+    job: job('watering', thirsty, plot.kind),
   }
 }
 
@@ -166,6 +178,7 @@ export type Scene = {
   frame: number
   isWorking: boolean
   width: number
+  weather?: Condition | null
 }
 
 type Canvas = { pixels: Uint32Array; width: number; set: (x: number, y: number, color: number) => void }
@@ -190,6 +203,84 @@ const paintGround = (c: Canvas) => {
   for (let plot = 0; plot < PLOT_COUNT; plot += 1) {
     span(c, plotX(plot, c.width) - 2, plotX(plot, c.width) + 2, 10, TILLED)
   }
+}
+
+const SUN = 0xf7c531
+const SUN_CORE = 0xfde68a
+const CLOUD = [0xd9dce4, 0xb9bec9] as const
+const STORM_CLOUD = [0x9aa0ad, 0x7f8594] as const
+const RAIN = [0x4fa3e0, 0x9fd0f5] as const
+const SNOW = 0xf4f6fb
+const SNOW_SHADE = 0xd6e2f0
+
+const SUN_EDGE = 0xe0a92a
+
+const paintSun = (c: Canvas, frame: number) => {
+  const { set } = c
+  span(c, 1, 3, 0, SUN)
+  span(c, 1, 3, 1, SUN)
+  span(c, 1, 3, 2, SUN)
+  ;[[1, 0], [3, 0], [1, 2], [3, 2]].forEach(([x, y]) => set(x ?? 0, y ?? 0, SUN_EDGE))
+  set(2, 1, SUN_CORE)
+  const rays = Math.floor(frame / 4) % 2 === 0 ? [[0, 1], [4, 1], [2, 3]] : [[0, 3], [4, 3], [0, 0], [4, 0]]
+  rays.forEach(([x, y]) => set(x ?? 0, y ?? 0, SUN))
+}
+
+const paintCloud = (c: Canvas, x: number, y: number, [top, bottom]: readonly [number, number]) => {
+  span(c, x + 1, x + 2, y, top)
+  span(c, x + 4, x + 5, y, top)
+  span(c, x, x + 6, y + 1, bottom)
+}
+
+const paintClouds = (c: Canvas, frame: number, colors: readonly [number, number]) => {
+  const drift = Math.floor(frame / 4)
+  const lane = c.width + 9
+  paintCloud(c, ((drift + 7) % lane) - 7, 0, colors)
+  paintCloud(c, ((drift + Math.floor(lane / 2)) % lane) - 7, 1, colors)
+}
+
+const FALL_ROWS = 7
+
+const fallSpot = (width: number, seed: number, phase: number): { x: number; y: number } => ({
+  x: scramble(seed * 7919 + Math.floor(phase / FALL_ROWS)) % width,
+  y: 3 + (phase % FALL_ROWS),
+})
+
+const paintRain = ({ set, width }: Canvas, frame: number) => {
+  for (let i = 0; i < Math.floor(width / 12); i += 1) {
+    const { x, y } = fallSpot(width, i + 1, frame + i * 3)
+    set(x, y, RAIN[0])
+    set(x, y - 1, RAIN[1])
+  }
+}
+
+const paintSnowfall = ({ set, width }: Canvas, frame: number) => {
+  for (let i = 0; i < Math.floor(width / 10); i += 1) {
+    const { x, y } = fallSpot(width, i + 101, Math.floor(frame / 3) + i * 3)
+    const sway = Math.floor((frame + i * 2) / 6) % 2
+    set((x + sway) % width, y, SNOW)
+  }
+}
+
+const paintSky = (c: Canvas, weather: Condition, frame: number) => {
+  if (weather === 'sunny') paintSun(c, frame)
+  if (weather === 'cloudy') paintClouds(c, frame, CLOUD)
+  if (weather === 'rainy') {
+    paintClouds(c, frame, STORM_CLOUD)
+    paintRain(c, frame)
+  }
+  if (weather === 'snowy') {
+    paintClouds(c, frame, CLOUD)
+    paintSnowfall(c, frame)
+  }
+}
+
+const paintSnowCover = (c: Canvas) => {
+  for (let x = 0; x < c.width; x += 1) {
+    if (x % 7 !== 3) c.set(x, 10, x % 5 === 0 ? SNOW_SHADE : SNOW)
+  }
+  const left = stallX(c.width)
+  for (let x = left; x < c.width; x += 2) c.set(x, 2, SNOW)
 }
 
 const paintBloom = ({ set }: Canvas, x: number, y: number, flower: Flower) => {
@@ -483,9 +574,12 @@ const paintChore = (c: Canvas, scene: Scene, head: number) => {
 export const paint = (scene: Scene): Uint32Array => {
   const c = canvas(scene.width)
   const { garden } = scene
+  const weather = scene.weather ?? null
+  if (weather) paintSky(c, weather, scene.frame)
   paintGround(c)
   garden.plots.forEach((plot, i) => paintPlot(c, plot, plotX(i, scene.width)))
   paintStall(c, garden.basket, garden.coins, scene.frame)
+  if (weather === 'snowy') paintSnowCover(c)
   const head = paintClaude(c, scene.claudeX, poseFor(scene))
   paintAccessory(c, scene.claudeX, head, scene)
   if (isChoringIn(scene)) paintChore(c, scene, head)

@@ -1,28 +1,38 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Garden, Usage, UsageWindow } from '../types'
+import type { Condition, Detected, Garden, Language, Prefs, Usage, UsageWindow, Weather } from '../types'
 import {
-  ACCESSORIES,
   BASKET_SIZE,
   SCENE_ROWS,
   accessoryFor,
   freshGarden,
   hourOf,
-  isGarden,
+  loadGarden,
   sceneCells,
   spotFor,
   work,
 } from './garden'
+import { LANGUAGES, STRINGS, detectLanguage, doingText, languageName, parseLanguage } from './i18n'
+import type { Strings } from './i18n'
 import { GAP, MINI_BAR_CELLS, costText, layoutFor, lineText, readingsOf } from './layout'
+import { cityForZone } from './places'
+import type { City } from './places'
 import { BAR_CELLS, barCells, emptyUsage, formatReset, prettyModel, windowOf } from './stats'
+import { WEATHER_REFRESH_MS, parseCondition, weatherUrl } from './weather'
 
 const garden = atom({ plugin: 'garden-claude', key: 'garden' } as const, freshGarden())
 const hour = atom({ plugin: 'garden-claude', key: 'hour' } as const, -1)
 const minute = atom({ plugin: 'garden-claude', key: 'minute' } as const, 0)
 const usage = atom({ plugin: 'garden-claude', key: 'usage' } as const, emptyUsage())
+const prefs = atom({ plugin: 'garden-claude', key: 'prefs' } as const, { language: 'auto' })
+const detected = atom({ plugin: 'garden-claude', key: 'detected' } as const, { language: 'en', timeZone: 'UTC' })
+const weather = atom({ plugin: 'garden-claude', key: 'weather' } as const, null)
 
-const STORE_KEY = 'garden'
+const GARDEN_KEY = 'garden'
+const PREFS_KEY = 'prefs'
+const LANGUAGE_COMMAND = 'garden-claude-language'
+const LANGUAGE_PANE = 'garden-claude-language'
 const FRAME_MS = 200
 const CLOCK_MS = 60_000
 const RASTER = 'garden'
@@ -34,8 +44,18 @@ let facing = 0
 let frame = 0
 let isWorking = false
 let site: string | undefined
-let shown: { garden: Garden; accessory: number; width: number } | undefined
-let ticker: { cancel: () => void } | undefined
+let shown: { garden: Garden; accessory: number; width: number; weather: Weather['condition'] | null } | undefined
+let timers: readonly { cancel: () => void }[] | undefined
+
+const languageOf = (chosen: Prefs, found: Detected): Language =>
+  chosen.language === 'auto' ? found.language : chosen.language
+
+const loadPrefs = (value: unknown): Prefs | null => {
+  const saved = value as Partial<Prefs> | null
+  if (typeof saved !== 'object' || saved === null) return null
+  const language = typeof saved.language === 'string' ? parseLanguage(saved.language) : null
+  return { language: language ?? 'auto' }
+}
 
 async function tick($: EngineInterface) {
   frame += 1
@@ -51,8 +71,12 @@ async function tick($: EngineInterface) {
   await $.ui.blit({ requestId: site, key: RASTER, cells })
 }
 
-function startTicker($: EngineInterface) {
-  ticker ??= $.clock.every(FRAME_MS, () => void tick($))
+function startTimers($: EngineInterface) {
+  timers ??= [
+    $.clock.every(FRAME_MS, () => void tick($)),
+    $.clock.every(CLOCK_MS, () => void refreshClock($)),
+    $.clock.every(WEATHER_REFRESH_MS, () => void refreshWeather($)),
+  ]
 }
 
 async function refreshClock($: EngineInterface) {
@@ -72,16 +96,77 @@ async function measure($: EngineInterface) {
   }))
 }
 
+async function detect($: EngineInterface) {
+  const locales = [await $.env.get('LC_ALL'), await $.env.get('LANG')]
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  await update($, detected, () => ({ language: detectLanguage(locales, timeZone), timeZone }))
+}
+
+async function fetchCondition($: EngineInterface, city: City): Promise<Condition | null> {
+  try {
+    const response = await $.http.fetch(weatherUrl(city))
+    return response.ok ? parseCondition(response.text) : null
+  } catch {
+    return null
+  }
+}
+
+async function refreshWeather($: EngineInterface) {
+  const city = cityForZone((await read($, detected)).timeZone)
+  const condition = city ? await fetchCondition($, city) : null
+  await update($, weather, () => (city && condition ? { condition, city: city.zone } : null))
+}
+
+async function chooseLanguage($: EngineInterface, language: Language | 'auto') {
+  const next = await update($, prefs, current => ({ ...current, language }))
+  await $.store.set(PREFS_KEY, next)
+}
+
+async function pickLanguage($: EngineInterface, value: string) {
+  const language = parseLanguage(value)
+  if (language !== null) await chooseLanguage($, language)
+  await $.ui.close({ id: LANGUAGE_PANE })
+}
+
+async function stringsNow($: EngineInterface): Promise<Strings> {
+  return STRINGS[languageOf(await read($, prefs), await read($, detected))]
+}
+
+const languageList = (strings: Strings): string =>
+  [strings.supportedLanguages, '  auto', ...LANGUAGES.map(({ code, name }) => `  ${code}: ${name}`)].join('\n')
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    const saved = await $.store.get(STORE_KEY)
-    if (isGarden(saved)) await update($, garden, () => saved)
+    const saved = loadGarden(await $.store.get(GARDEN_KEY))
+    if (saved) await update($, garden, () => saved)
+    const savedPrefs = loadPrefs(await $.store.get(PREFS_KEY))
+    if (savedPrefs) await update($, prefs, () => savedPrefs)
+    await detect($)
     await refreshClock($)
     await measure($)
-    $.clock.every(CLOCK_MS, () => void refreshClock($))
-    startTicker($)
+    await $.command.register({
+      name: LANGUAGE_COMMAND,
+      description: 'Pick the language Garden Claude speaks',
+      argumentHint: '[auto | en | zh-TW | zh-CN | ja | ko]',
+    })
+    void refreshWeather($)
+    startTimers($)
 
     return next(e)
+  })
+
+  on('command.run', { command: LANGUAGE_COMMAND }, async ($, e) => {
+    const strings = await stringsNow($)
+    if (e.args.trim() === '') {
+      await $.ui.open({ id: LANGUAGE_PANE, title: strings.languageTitle, focus: true, closeOnEscape: true, holdToasts: true, rows: LANGUAGES.length + 5 })
+      return {}
+    }
+    const language = parseLanguage(e.args)
+    if (language === null) return { text: `${strings.unknownLanguage(e.args.trim())}\n${languageList(strings)}` }
+    await chooseLanguage($, language)
+    const after = await stringsNow($)
+    const found = await read($, detected)
+    return { text: after.languageSet(languageName(language === 'auto' ? found.language : language)) }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -107,6 +192,7 @@ export const register: Register = on => {
 
   on('turn.start', ($, e, next) => {
     isWorking = true
+    startTimers($)
 
     return next(e)
   })
@@ -119,13 +205,43 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const grown = await update($, garden, work)
-    await $.store.set(STORE_KEY, grown)
+    await $.store.set(GARDEN_KEY, grown)
+    startTimers($)
 
     return next(e)
   })
 
+  on('ui.render', { component: 'Pane', requestId: LANGUAGE_PANE }, async ($, e) => {
+    const chosen = await read($, prefs)
+    const found = await read($, detected)
+    const strings = STRINGS[languageOf(chosen, found)]
+    if (e.surface === 'mobile') {
+      const { Text } = $.ui.resolve(e)
+      return <Text>{languageList(strings)}</Text>
+    }
+    const { Box, Text, Select } = $.ui.resolve(e)
+    const options = [
+      { value: 'auto', label: strings.autoLanguage(languageName(found.language)) },
+      ...LANGUAGES.map(({ code, name }) => ({ value: code, label: name })),
+    ]
+
+    return (
+      <Box flexDirection="column">
+        <Select
+          key="language"
+          options={options}
+          value={chosen.language}
+          autoFocus
+          onSelect={(value: string) => void pickLanguage($, value)}
+        />
+        <Text dimColor>{strings.pickHint}</Text>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
+    startTimers($)
 
     const storedHour = await read($, hour)
     const now = await $.clock.now()
@@ -133,13 +249,31 @@ export const register: Register = on => {
     const accessory = accessoryFor(storedHour >= 0 ? storedHour : hourOf(now))
     const current = await read($, garden)
     const stats: Usage = await read($, usage)
+    const chosen = await read($, prefs)
+    const found = await read($, detected)
+    const sky = await read($, weather)
+    const language = languageOf(chosen, found)
+    const strings = STRINGS[language]
+    const city = cityForZone(found.timeZone)
+    const condition = sky && city && sky.city === city.zone ? sky.condition : null
     const working = e.props.isWorking
-    const doing = working ? current.job.label : 'resting in the shade'
     const isTerminal = e.surface === 'terminal'
     const layout = layoutFor(e.props.bodyColumns, e.props.maxRows, isTerminal, stats)
 
     site = e.requestId
-    shown = layout.sceneWidth === null ? undefined : { garden: current, accessory, width: layout.sceneWidth }
+    shown =
+      layout.sceneWidth === null
+        ? undefined
+        : { garden: current, accessory, width: layout.sceneWidth, weather: condition }
+
+    const place = city ? [city.names[language], condition ? strings.weather[condition] : null].filter(Boolean).join(' ') : ''
+    const details = [
+      ...(place ? [place] : []),
+      strings.accessories[accessory] ?? strings.accessories[0],
+      doingText(strings, current.job, working),
+      strings.basket(current.basket.length, BASKET_SIZE),
+      strings.coins(current.coins),
+    ].join(' · ')
 
     const { Box, Text } = $.ui.resolve(e)
 
@@ -149,8 +283,7 @@ export const register: Register = on => {
           Garden Claude{' '}
         </Text>
         <Text dimColor wrap="truncate-end">
-          wearing {ACCESSORIES[accessory]} · {doing} · basket {current.basket.length}/{BASKET_SIZE} ·{' '}
-          {current.coins} coins
+          {details}
         </Text>
       </Box>
     )
@@ -195,7 +328,7 @@ export const register: Register = on => {
             {window.resetsAt && <Text dimColor> · {formatReset(window.resetsAt, now)}</Text>}
           </Box>
         ) : (
-          <Text dimColor>no reading yet</Text>
+          <Text dimColor>--</Text>
         )}
       </Box>
     )

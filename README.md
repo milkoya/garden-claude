@@ -52,6 +52,50 @@ The board isn't pixel art like the garden: it's regular terminal text with chunk
 
 Since this covers what most status lines show, you may want to turn off your own `statusLine` setting so the numbers don't show twice.
 
+## 🌦️ Weather
+
+Garden Claude's sky follows the real weather where you are.
+
+![The garden in sunny, cloudy, rainy and snowy weather](docs/weather.gif)
+
+- ☀️ **Sunny**: a twinkling sun
+- ☁️ **Cloudy**: fluffy clouds drifting by
+- 🌧️ **Rainy**: grey clouds and falling rain
+- ❄️ **Snowy**: snowflakes drift down and the ground (and the stall's roof) gets a soft white blanket
+
+The weather is checked when Garden Claude starts and every 30 minutes after, and the city's name and weather show in the caption under the garden. If the weather service can't be reached, the sky is simply clear until it can.
+
+**Where?** Garden Claude uses your computer's **time zone** to find your area, so there's nothing to set up. The caption shows your time zone's city in your language, like `台北 下雨` or `ワルシャワ 雪`. City names come from the Unicode CLDR project, the same names your computer uses. If your computer uses a time zone with no place attached, like `UTC`, the sky simply stays clear.
+
+## 🌏 Languages
+
+Garden Claude speaks five languages:
+
+| | |
+| --- | --- |
+| `en` | English |
+| `zh-TW` | 繁體中文 |
+| `zh-CN` | 简体中文 |
+| `ja` | 日本語 |
+| `ko` | 한국어 |
+
+By default it follows your **computer's language**. To switch:
+
+```
+/garden-claude-language
+```
+
+Pick from the list, or type it directly, like `/garden-claude-language zh-TW`. Use `auto` to follow your computer again.
+
+## 🔒 Privacy
+
+Garden Claude keeps things gentle:
+
+- **No location tracking.** It never looks up your IP address or asks where you are. "Auto" only reads your computer's time zone, right on your machine.
+- **One small request.** When it starts and every 30 minutes after, it asks [Open-Meteo](https://open-meteo.com), a free public weather service, for the weather at your time zone's location. Like any website, Open-Meteo sees that a request came in, but nothing else about you is sent.
+- **Your language stays local.** It's read from your computer and never sent anywhere.
+- **Saved on your machine.** Your garden, coins and settings are stored by Claude Code on your computer only.
+
 ## 🌱 Install
 
 ```sh
@@ -85,10 +129,14 @@ Start a new Claude Code session and your garden appears above the prompt.
 
 | File | What's inside |
 | --- | --- |
-| `hooks/garden.ts` | The garden rules, the pixel painter and every animation |
+| `hooks/garden.ts` | The garden rules, the pixel painter, the weather and every animation |
+| `hooks/i18n.ts` | Every word Garden Claude says, in five languages |
+| `hooks/places.ts` | Finding the city for a time zone |
+| `hooks/zones.ts` | Every time zone's location and city name in five languages, from the time zone database and Unicode CLDR |
+| `hooks/weather.ts` | Turning Open-Meteo's forecast into sunny, cloudy, rainy or snowy |
 | `hooks/layout.ts` | How the band fits different window sizes |
 | `hooks/stats.ts` | The status board's bars and numbers |
-| `hooks/register.tsx` | The hooks that connect it all to Claude Code |
+| `hooks/register.tsx` | The hooks, commands and pickers that connect it all to Claude Code |
 
 Check your changes with:
 
