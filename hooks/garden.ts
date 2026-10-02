@@ -27,11 +27,12 @@ export type Flower = (typeof FLOWERS)[number]
 export const flowerOf = (kind: number): Flower => FLOWERS[kind % FLOWERS.length] ?? FLOWERS[0]
 
 export const freshGarden = (): Garden => ({
-  plots: Array.from({ length: PLOT_COUNT }, () => ({ stage: 0, kind: 0 })),
+  plots: Array.from({ length: PLOT_COUNT }, () => ({ stage: 0, kind: 0, thirst: 0 })),
   basket: [],
   coins: 0,
   planted: 0,
-  job: { kind: 'resting', plot: 0, flower: 0, count: 0, earned: 0 },
+  chores: 0,
+  job: { kind: 'resting', plot: 0, flower: 0, stage: 0, count: 0, earned: 0 },
 })
 
 export const isGarden = (value: unknown): value is Garden => {
@@ -48,10 +49,23 @@ export const isGarden = (value: unknown): value is Garden => {
   )
 }
 
+const numberOr = (value: unknown, fallback: number): number => (typeof value === 'number' ? value : fallback)
+
+const loadPlot = (saved: Partial<Plot>): Plot => ({
+  stage: numberOr(saved.stage, 0),
+  kind: numberOr(saved.kind, 0),
+  thirst: numberOr(saved.thirst, 0),
+})
+
 export const loadGarden = (saved: unknown): Garden | null => {
   if (!isGarden(saved)) return null
   const job = saved.job as Partial<Job>
-  return typeof job.flower === 'number' ? saved : { ...saved, job: freshGarden().job }
+  return {
+    ...saved,
+    plots: saved.plots.map(loadPlot),
+    chores: numberOr(saved.chores, 0),
+    job: typeof job.flower === 'number' ? { ...saved.job, stage: numberOr(job.stage, 0) } : freshGarden().job,
+  }
 }
 
 export const scramble = (n: number): number => {
@@ -69,19 +83,83 @@ export const accessoryFor = (hour: number): number => {
   return pick === previous ? (pick + 1) % ACCESSORIES.length : pick
 }
 
-const withPlot = (plots: Plot[], index: number, plot: Plot): Plot[] =>
-  plots.map((one, i) => (i === index ? plot : one))
+const isGrowing = (plot: Plot): boolean => plot.stage > 0 && plot.stage < BLOOM
 
-const job = (kind: Job['kind'], plot: number, flower = 0, count = 0, earned = 0): Job => ({
+const tend = (plots: Plot[], index: number, plot: Omit<Plot, 'thirst'>): Plot[] =>
+  plots.map((one, i) => {
+    if (i === index) return { ...plot, thirst: 0 }
+    return isGrowing(one) ? { ...one, thirst: one.thirst + 1 } : one
+  })
+
+const STALL_SPOT = PLOT_COUNT
+
+const spotOf = (job: Job): number => (job.plot < 0 ? STALL_SPOT : job.plot)
+
+const nearest = (plots: Plot[], from: number, wanted: (plot: Plot) => boolean): number =>
+  plots.reduce(
+    (best, plot, i) =>
+      wanted(plot) && (best < 0 || Math.abs(i - from) < Math.abs(best - from)) ? i : best,
+    -1,
+  )
+
+export const THIRSTY = 8
+
+const seedOf = (garden: Garden): number => scramble(garden.chores + 0x51ed)
+
+const NEARBY = 1.5
+const WHIM = 200
+
+const thirstOf = (plot: Plot): number => (plot.thirst === 0 ? -THIRSTY : plot.thirst)
+
+const needOf = (plot: Plot, i: number, from: number, seed: number): number =>
+  thirstOf(plot) - Math.abs(i - from) * NEARBY + (scramble(seed * PLOT_COUNT + i) % WHIM) / 100
+
+const thirstiest = (garden: Garden, from: number): number => {
+  const seed = seedOf(garden)
+  const needs = garden.plots.map((plot, i) => needOf(plot, i, from, seed))
+  return needs.indexOf(Math.max(...needs))
+}
+
+const job = (kind: Job['kind'], details: Partial<Omit<Job, 'kind'>> = {}): Job => ({
   kind,
-  plot,
-  flower,
-  count,
-  earned,
+  plot: 0,
+  flower: 0,
+  stage: 0,
+  count: 0,
+  earned: 0,
+  ...details,
 })
 
-export const work = (garden: Garden): Garden => {
+const water = (garden: Garden, index: number): Garden => {
+  const plot = garden.plots[index] ?? { stage: 1, kind: 0 }
+  const stage = plot.stage + (scramble(seedOf(garden) + index) % 3 !== 0 ? 1 : 0)
+  return {
+    ...garden,
+    plots: tend(garden.plots, index, { stage, kind: plot.kind }),
+    job: job('watering', { plot: index, flower: plot.kind, stage }),
+  }
+}
+
+const rainOn = (garden: Garden): Garden => {
+  const growing = garden.plots.flatMap((plot, i) => (isGrowing(plot) ? [i] : []))
+  const soaked = growing[seedOf(garden) % Math.max(growing.length, 1)]
+  return {
+    ...garden,
+    plots: garden.plots.map((plot, i) =>
+      isGrowing(plot) ? { ...plot, stage: plot.stage + (i === soaked ? 1 : 0), thirst: 0 } : plot,
+    ),
+  }
+}
+
+const rest = (garden: Garden): Garden => ({ ...garden, job: job('resting', { plot: garden.job.plot }) })
+
+export const work = (previous: Garden, condition: Condition | null = null): Garden => {
+  if (condition === 'snowy') return rest(previous)
+  const isRaining = condition === 'rainy'
+  const chored = { ...previous, chores: previous.chores + 1 }
+  const garden = isRaining ? rainOn(chored) : chored
   const { plots, basket } = garden
+  const from = spotOf(garden.job)
 
   if (basket.length >= BASKET_SIZE) {
     const earned = basket.reduce((sum, kind) => sum + flowerOf(kind).price, 0)
@@ -89,42 +167,36 @@ export const work = (garden: Garden): Garden => {
       ...garden,
       basket: [],
       coins: garden.coins + earned,
-      job: job('selling', -1, 0, basket.length, earned),
+      job: job('selling', { plot: -1, count: basket.length, earned }),
     }
   }
 
-  const ripe = plots.findIndex(plot => plot.stage >= BLOOM)
+  const parched = nearest(plots, from, plot => isGrowing(plot) && plot.thirst >= THIRSTY)
+  if (parched >= 0) return water(garden, parched)
+
+  const ripe = nearest(plots, from, plot => plot.stage >= BLOOM)
   if (ripe >= 0) {
     const kind = plots[ripe]?.kind ?? 0
     return {
       ...garden,
-      plots: withPlot(plots, ripe, { stage: 0, kind }),
+      plots: tend(plots, ripe, { stage: 0, kind }),
       basket: [...basket, kind],
-      job: job('harvesting', ripe, kind),
+      job: job('harvesting', { plot: ripe, flower: kind, stage: BLOOM }),
     }
   }
 
-  const empty = plots.findIndex(plot => plot.stage === 0)
+  const empty = nearest(plots, from, plot => plot.stage === 0)
   if (empty >= 0) {
     const kind = scramble(garden.planted) % FLOWERS.length
     return {
       ...garden,
-      plots: withPlot(plots, empty, { stage: 1, kind }),
+      plots: tend(plots, empty, { stage: 1, kind }),
       planted: garden.planted + 1,
-      job: job('planting', empty, kind),
+      job: job('planting', { plot: empty, flower: kind, stage: 1 }),
     }
   }
 
-  const thirsty = plots.reduce(
-    (best, plot, i) => (plot.stage < (plots[best]?.stage ?? BLOOM) ? i : best),
-    0,
-  )
-  const plot = plots[thirsty] ?? { stage: 1, kind: 0 }
-  return {
-    ...garden,
-    plots: withPlot(plots, thirsty, { ...plot, stage: plot.stage + 1 }),
-    job: job('watering', thirsty, plot.kind),
-  }
+  return isRaining ? rest(garden) : water(garden, thirstiest(garden, from))
 }
 
 export const MAX_SCENE_COLUMNS = 60
@@ -369,7 +441,8 @@ export type Pose = {
 const isWalkingIn = (scene: Scene): boolean =>
   spotFor(scene.garden.job, scene.claudeX, scene.width) !== scene.claudeX
 
-const isChoringIn = (scene: Scene): boolean => scene.isWorking && !isWalkingIn(scene)
+const isChoringIn = (scene: Scene): boolean =>
+  scene.isWorking && scene.garden.job.kind !== 'resting' && !isWalkingIn(scene)
 
 const idlePose = (scene: Scene): Pose => {
   const cycle = scene.frame % IDLE_CYCLE

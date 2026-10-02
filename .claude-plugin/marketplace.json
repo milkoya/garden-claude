@@ -9,7 +9,7 @@
       "name": "garden-claude",
       "source": "./",
       "description": "A pixel-art Claude tends a flower garden above your prompt while you work",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }

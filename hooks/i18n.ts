@@ -16,7 +16,9 @@ export type Strings = {
   planting: (flower: string) => string
   watering: (flower: string) => string
   harvesting: (flower: string) => string
-  selling: (count: number) => string
+  selling: (count: number, earned: number) => string
+  stages: readonly [string, string, string, string]
+  withStage: (chore: string, stage: string) => string
   basket: (count: number, size: number) => string
   coins: (count: number) => string
   languageTitle: string
@@ -35,7 +37,9 @@ const ENGLISH: Strings = {
   planting: flower => `planting ${flower}`,
   watering: flower => `watering ${flower}`,
   harvesting: flower => `picking ${flower}`,
-  selling: count => `selling ${count}`,
+  selling: (count, earned) => `selling ${count}, +${earned} coins`,
+  stages: ['seed', 'sprout', 'bud', 'in bloom'],
+  withStage: (chore, stage) => `${chore}, ${stage}`,
   basket: (count, size) => `basket ${count}/${size}`,
   coins: count => `${count} coins`,
   languageTitle: 'Garden language',
@@ -54,7 +58,9 @@ const TRADITIONAL: Strings = {
   planting: flower => `種${flower}`,
   watering: flower => `澆${flower}`,
   harvesting: flower => `摘${flower}`,
-  selling: count => `賣出 ${count} 朵`,
+  selling: (count, earned) => `賣出 ${count} 朵 +${earned} 金幣`,
+  stages: ['種子', '發芽', '花苞', '盛開'],
+  withStage: (chore, stage) => `${chore}，${stage}`,
   basket: (count, size) => `籃子 ${count}/${size}`,
   coins: count => `${count} 金幣`,
   languageTitle: '花園語言',
@@ -73,7 +79,9 @@ const SIMPLIFIED: Strings = {
   planting: flower => `种${flower}`,
   watering: flower => `浇${flower}`,
   harvesting: flower => `摘${flower}`,
-  selling: count => `卖出 ${count} 朵`,
+  selling: (count, earned) => `卖出 ${count} 朵 +${earned} 金币`,
+  stages: ['种子', '发芽', '花苞', '盛开'],
+  withStage: (chore, stage) => `${chore}，${stage}`,
   basket: (count, size) => `篮子 ${count}/${size}`,
   coins: count => `${count} 金币`,
   languageTitle: '花园语言',
@@ -92,7 +100,9 @@ const JAPANESE: Strings = {
   planting: flower => `${flower}の種まき`,
   watering: flower => `${flower}に水やり`,
   harvesting: flower => `${flower}を収穫`,
-  selling: count => `${count}本販売`,
+  selling: (count, earned) => `${count}本販売 +${earned}コイン`,
+  stages: ['種', '芽', 'つぼみ', '満開'],
+  withStage: (chore, stage) => `${chore}、${stage}`,
   basket: (count, size) => `かご ${count}/${size}`,
   coins: count => `${count} コイン`,
   languageTitle: 'ガーデンの言語',
@@ -111,7 +121,9 @@ const KOREAN: Strings = {
   planting: flower => `${flower} 심기`,
   watering: flower => `${flower} 물주기`,
   harvesting: flower => `${flower} 수확`,
-  selling: count => `${count}송이 판매`,
+  selling: (count, earned) => `${count}송이 판매 +${earned} 코인`,
+  stages: ['씨앗', '새싹', '꽃봉오리', '만개'],
+  withStage: (chore, stage) => `${chore}, ${stage}`,
   basket: (count, size) => `바구니 ${count}/${size}`,
   coins: count => `${count} 코인`,
   languageTitle: '정원 언어',
@@ -136,17 +148,22 @@ export const languageName = (code: Language): string =>
 const flowerName = (strings: Strings, kind: number): string =>
   strings.flowers[kind % strings.flowers.length] ?? strings.flowers[0]
 
+const withStageOf = (strings: Strings, job: Job, chore: string): string => {
+  const stage = strings.stages[job.stage - 1]
+  return stage === undefined ? chore : strings.withStage(chore, stage)
+}
+
 export const doingText = (strings: Strings, job: Job, isWorking: boolean): string => {
   if (!isWorking) return strings.resting
   switch (job.kind) {
     case 'planting':
-      return strings.planting(flowerName(strings, job.flower))
+      return withStageOf(strings, job, strings.planting(flowerName(strings, job.flower)))
     case 'watering':
-      return strings.watering(flowerName(strings, job.flower))
+      return withStageOf(strings, job, strings.watering(flowerName(strings, job.flower)))
     case 'harvesting':
-      return strings.harvesting(flowerName(strings, job.flower))
+      return withStageOf(strings, job, strings.harvesting(flowerName(strings, job.flower)))
     case 'selling':
-      return strings.selling(job.count)
+      return strings.selling(job.count, job.earned)
     default:
       return strings.resting
   }

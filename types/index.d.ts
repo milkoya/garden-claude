@@ -1,14 +1,15 @@
-export type Plot = { stage: number; kind: number }
+export type Plot = { stage: number; kind: number; thirst: number }
 
 export type JobKind = 'resting' | 'planting' | 'watering' | 'harvesting' | 'selling'
 
-export type Job = { kind: JobKind; plot: number; flower: number; count: number; earned: number }
+export type Job = { kind: JobKind; plot: number; flower: number; stage: number; count: number; earned: number }
 
 export type Garden = {
   plots: Plot[]
   basket: number[]
   coins: number
   planted: number
+  chores: number
   job: Job
 }
 

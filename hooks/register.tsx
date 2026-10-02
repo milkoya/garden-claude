@@ -15,10 +15,10 @@ import {
 } from './garden'
 import { LANGUAGES, STRINGS, detectLanguage, doingText, languageName, parseLanguage } from './i18n'
 import type { Strings } from './i18n'
-import { GAP, MINI_BAR_CELLS, costText, layoutFor, lineText, readingsOf } from './layout'
+import { GAP, KEEP, MINI_BAR_CELLS, captionFor, costText, layoutFor, lineText, readingsOf } from './layout'
 import { cityForZone } from './places'
 import type { City } from './places'
-import { BAR_CELLS, barCells, emptyUsage, formatReset, prettyModel, windowOf } from './stats'
+import { barCells, emptyUsage, formatReset, prettyModel, windowOf } from './stats'
 import { WEATHER_REFRESH_MS, parseCondition, weatherUrl } from './weather'
 
 const garden = atom({ plugin: 'garden-claude', key: 'garden' } as const, freshGarden())
@@ -38,8 +38,11 @@ const CLOCK_MS = 60_000
 const RASTER = 'garden'
 const ORANGE = '#d97757'
 const GOLD = '#f2c84b'
+const TITLE = 'Garden Claude '
 
-let claudeX = 4
+const START_X = 4
+
+let claudeX: number | undefined
 let facing = 0
 let frame = 0
 let isWorking = false
@@ -59,7 +62,7 @@ const loadPrefs = (value: unknown): Prefs | null => {
 
 async function tick($: EngineInterface) {
   frame += 1
-  if (!shown || site === undefined) return
+  if (!shown || site === undefined || claudeX === undefined) return
   const target = spotFor(shown.garden.job, claudeX, shown.width)
   if (claudeX !== target) {
     facing = Math.sign(target - claudeX)
@@ -115,6 +118,12 @@ async function refreshWeather($: EngineInterface) {
   const city = cityForZone((await read($, detected)).timeZone)
   const condition = city ? await fetchCondition($, city) : null
   await update($, weather, () => (city && condition ? { condition, city: city.zone } : null))
+}
+
+async function conditionNow($: EngineInterface): Promise<Condition | null> {
+  const sky = await read($, weather)
+  const city = cityForZone((await read($, detected)).timeZone)
+  return sky && city && sky.city === city.zone ? sky.condition : null
 }
 
 async function chooseLanguage($: EngineInterface, language: Language | 'auto') {
@@ -191,20 +200,14 @@ export const register: Register = on => {
   })
 
   on('turn.start', ($, e, next) => {
-    isWorking = true
     startTimers($)
 
     return next(e)
   })
 
-  on('turn.complete', ($, e, next) => {
-    isWorking = false
-
-    return next(e)
-  })
-
   on('tool.call', async ($, e, next) => {
-    const grown = await update($, garden, work)
+    const condition = await conditionNow($)
+    const grown = await update($, garden, current => work(current, condition))
     await $.store.set(GARDEN_KEY, grown)
     startTimers($)
 
@@ -251,12 +254,11 @@ export const register: Register = on => {
     const stats: Usage = await read($, usage)
     const chosen = await read($, prefs)
     const found = await read($, detected)
-    const sky = await read($, weather)
     const language = languageOf(chosen, found)
     const strings = STRINGS[language]
     const city = cityForZone(found.timeZone)
-    const condition = sky && city && sky.city === city.zone ? sky.condition : null
-    const working = e.props.isWorking
+    const condition = await conditionNow($)
+    isWorking = e.props.isWorking
     const isTerminal = e.surface === 'terminal'
     const layout = layoutFor(e.props.bodyColumns, e.props.maxRows, isTerminal, stats)
 
@@ -265,23 +267,30 @@ export const register: Register = on => {
       layout.sceneWidth === null
         ? undefined
         : { garden: current, accessory, width: layout.sceneWidth, weather: condition }
+    if (shown) claudeX ??= spotFor(current.job, START_X, shown.width)
 
     const place = city ? [city.names[language], condition ? strings.weather[condition] : null].filter(Boolean).join(' ') : ''
-    const details = [
-      ...(place ? [place] : []),
-      strings.accessories[accessory] ?? strings.accessories[0],
-      doingText(strings, current.job, working),
-      strings.basket(current.basket.length, BASKET_SIZE),
-      strings.coins(current.coins),
-    ].join(' · ')
+    const { hasTitle, details } = captionFor(
+      TITLE,
+      [
+        { text: place, dropOrder: 2 },
+        { text: strings.accessories[accessory] ?? strings.accessories[0], dropOrder: 4 },
+        { text: doingText(strings, current.job, isWorking), dropOrder: KEEP },
+        { text: strings.basket(current.basket.length, BASKET_SIZE), dropOrder: 3 },
+        { text: strings.coins(current.coins), dropOrder: 1 },
+      ],
+      e.props.bodyColumns,
+    )
 
     const { Box, Text } = $.ui.resolve(e)
 
     const caption = (
       <Box flexDirection="row">
-        <Text color={ORANGE} bold>
-          Garden Claude{' '}
-        </Text>
+        {hasTitle && (
+          <Text color={ORANGE} bold>
+            {TITLE}
+          </Text>
+        )}
         <Text dimColor wrap="truncate-end">
           {details}
         </Text>
@@ -297,7 +306,7 @@ export const register: Register = on => {
         <Text color={GOLD} bold>
           {costText(stats)}
         </Text>
-        {readingsOf(stats).map(({ label, percent }) => (
+        {readingsOf(stats, layout.lineLabels).map(({ label, percent }) => (
           <Box flexDirection="row">
             <Text dimColor> · </Text>
             <Text color={ORANGE}>{label} </Text>
@@ -313,7 +322,7 @@ export const register: Register = on => {
           {costText(stats)}
         </Text>
         <Text dimColor wrap="truncate-end">
-          {lineText(stats, layout.hasLineModel).slice(costText(stats).length)}
+          {lineText(stats, layout.hasLineModel, layout.lineLabels).slice(costText(stats).length)}
         </Text>
       </Box>
     )
@@ -323,7 +332,7 @@ export const register: Register = on => {
         <Text color={ORANGE}>{label} </Text>
         {window ? (
           <Box flexDirection="row">
-            <Raster key={key} columns={BAR_CELLS} rows={1} cells={barCells(window.percent)} />
+            <Raster key={key} columns={layout.barCells} rows={1} cells={barCells(window.percent, layout.barCells)} />
             <Text>{`${window.percent}%`.padStart(5)}</Text>
             {window.resetsAt && <Text dimColor> · {formatReset(window.resetsAt, now)}</Text>}
           </Box>
@@ -354,7 +363,7 @@ export const register: Register = on => {
           key={RASTER}
           columns={shown.width}
           rows={SCENE_ROWS}
-          cells={sceneCells({ ...shown, claudeX, facing, frame, isWorking: working })}
+          cells={sceneCells({ ...shown, claudeX: claudeX ?? START_X, facing, frame, isWorking })}
         />
       )
 

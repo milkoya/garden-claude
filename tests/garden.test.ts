@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import {
   ACCESSORIES,
@@ -11,6 +12,7 @@ import {
   MIN_SCENE_COLUMNS,
   plotX,
   SCENE_ROWS,
+  THIRSTY,
   accessoryFor,
   freshGarden,
   loadGarden,
@@ -21,7 +23,17 @@ import {
 } from '../hooks/garden'
 import type { Scene } from '../hooks/garden'
 import { BAR_CELLS, barCells, formatReset, prettyModel } from '../hooks/stats'
-import { GAP, STATS_BLOCK_COLUMNS, layoutFor, lineWidth } from '../hooks/layout'
+import {
+  CAPTION_SEPARATOR,
+  GAP,
+  MAX_BAR_CELLS,
+  STATS_BLOCK_COLUMNS,
+  captionFor,
+  displayWidth,
+  fitCaption,
+  layoutFor,
+  lineWidth,
+} from '../hooks/layout'
 import type { Usage } from '../types'
 import { LANGUAGES, STRINGS, detectLanguage, doingText, parseLanguage } from '../hooks/i18n'
 import { cityForZone } from '../hooks/places'
@@ -73,6 +85,85 @@ describe('the garden', () => {
     expect([...seen].sort()).toEqual(['harvesting', 'planting', 'selling', 'watering'])
     expect(garden.coins > 0).toBe(true)
   })
+
+  test('keeps tending every plot, not just the first', async () => {
+    let garden = freshGarden()
+    for (let i = 0; i < 100; i += 1) garden = work(garden)
+    const watered = new Set<number>()
+    const harvested = new Set<number>()
+    for (let i = 0; i < 200; i += 1) {
+      garden = work(garden)
+      if (garden.job.kind === 'watering') watered.add(garden.job.plot)
+      if (garden.job.kind === 'harvesting') harvested.add(garden.job.plot)
+    }
+    const everyPlot = Array.from({ length: PLOT_COUNT }, (_, plot) => plot)
+    expect([...watered].sort()).toEqual(everyPlot)
+    expect([...harvested].sort()).toEqual(everyPlot)
+  })
+
+  test('never leaves a flower waiting long', async () => {
+    let garden = freshGarden()
+    for (let i = 0; i < 1000; i += 1) {
+      garden = work(garden)
+      expect(Math.max(...garden.plots.map(plot => plot.thirst)) <= THIRSTY).toBe(true)
+    }
+  })
+
+  test('remembers how grown the flower is after each chore', async () => {
+    let garden = freshGarden()
+    for (let i = 0; i < 500; i += 1) {
+      garden = work(garden)
+      const { kind, plot, stage } = garden.job
+      if (kind === 'planting') expect(stage).toBe(1)
+      if (kind === 'watering') expect(stage).toBe(garden.plots[plot]?.stage ?? -1)
+      if (kind === 'harvesting') expect(stage).toBe(BLOOM)
+    }
+  })
+
+  test('moves on after watering a flower', async () => {
+    let garden = freshGarden()
+    for (let i = 0; i < 1000; i += 1) {
+      const before = garden.job
+      garden = work(garden)
+      const isRepeat = before.kind === 'watering' && garden.job.kind === 'watering' && before.plot === garden.job.plot
+      expect(isRepeat).toBe(false)
+    }
+  })
+
+  test('lets the rain do the watering', async () => {
+    let garden = freshGarden()
+    const seen = new Set<string>()
+    for (let i = 0; i < 300; i += 1) {
+      garden = work(garden, 'rainy')
+      seen.add(garden.job.kind)
+    }
+    expect(seen.has('watering')).toBe(false)
+    expect([...seen].sort()).toEqual(['harvesting', 'planting', 'resting', 'selling'])
+    expect(garden.coins > 0).toBe(true)
+  })
+
+  test('chills all day in the snow', async () => {
+    let garden = freshGarden()
+    for (let i = 0; i < 40; i += 1) garden = work(garden)
+    const before = garden
+    for (let i = 0; i < 50; i += 1) garden = work(garden, 'snowy')
+    expect(garden.job.kind).toBe('resting')
+    expect(garden.plots).toEqual(before.plots)
+    expect(garden.basket).toEqual(before.basket)
+    expect(garden.coins).toBe(before.coins)
+    expect(garden.chores).toBe(before.chores)
+  })
+
+  test('tends the garden in a loose order, not a fixed loop', async () => {
+    let garden = freshGarden()
+    const order: number[] = []
+    for (let i = 0; i < 300; i += 1) {
+      garden = work(garden)
+      if (garden.job.kind === 'watering') order.push(garden.job.plot)
+    }
+    const steps = order.slice(1).map((plot, i) => (plot - (order[i] ?? 0) + PLOT_COUNT) % PLOT_COUNT)
+    expect(new Set(steps).size > 2).toBe(true)
+  })
 })
 
 describe('the accessory', () => {
@@ -118,7 +209,7 @@ describe('the animations', () => {
   test('every chore moves while Claude works', async () => {
     const kinds = ['planting', 'watering', 'harvesting', 'selling'] as const
     for (const kind of kinds) {
-      const garden = { ...freshGarden(), basket: [1], job: { kind, plot: 0, flower: 1, count: 3, earned: 9 } }
+      const garden = { ...freshGarden(), basket: [1], job: { kind, plot: 0, flower: 1, stage: 0, count: 3, earned: 9 } }
       const claudeX = spotFor(garden.job, 4, MAX_SCENE_COLUMNS)
       const plain = ACCESSORIES.indexOf('a flower crown')
       expect(framesOf({ garden, accessory: plain, claudeX, facing: 1, isWorking: true, width: MAX_SCENE_COLUMNS }).size > 2).toBe(true)
@@ -154,14 +245,75 @@ describe('every terminal size', () => {
       for (let maxRows = 1; maxRows <= 30; maxRows += 1) {
         const layout = layoutFor(columns, maxRows, true, FULL_USAGE)
         const sceneRows = layout.sceneWidth === null ? 0 : SCENE_ROWS
-        const sceneColumns =
-          (layout.sceneWidth ?? 0) + (layout.isStatsBeside ? GAP + STATS_BLOCK_COLUMNS : 0)
+        const sceneColumns = (layout.sceneWidth ?? 0) + (layout.isStatsBeside ? GAP + layout.statsColumns : 0)
         expect(sceneColumns <= columns).toBe(true)
         expect(sceneRows + layout.below.length <= maxRows).toBe(true)
-        if (layout.hasLineBars) {
-          expect(lineWidth(FULL_USAGE, true, layout.hasLineModel) <= columns).toBe(true)
-        }
+        expect(lineWidth(FULL_USAGE, layout.hasLineBars, layout.hasLineModel, layout.lineLabels) <= columns).toBe(true)
       }
+    }
+  })
+
+  test('shortens the stats line by dropping the least useful readings first', async () => {
+    const at = (columns: number) => layoutFor(columns, 1, true, FULL_USAGE)
+    expect(at(120).lineLabels).toEqual(['ctx', '5h', '7d'])
+    expect(at(30).lineLabels).toEqual(['5h', '7d'])
+    expect(at(20).lineLabels).toEqual(['5h'])
+    expect(at(20).hasLineBars).toBe(false)
+  })
+
+  test('drops the title only when the chore and coins would not fit beside it', async () => {
+    const parts = [
+      { text: 'watering tulip, bud', dropOrder: 0 },
+      { text: '12 coins', dropOrder: 0 },
+    ]
+    expect(captionFor('Garden Claude ', parts, 80)).toEqual({ hasTitle: true, details: 'watering tulip, bud · 12 coins' })
+    expect(captionFor('Garden Claude ', parts, 40)).toEqual({ hasTitle: false, details: 'watering tulip, bud · 12 coins' })
+  })
+
+  test('counts Chinese, Japanese and Korean characters as two columns', async () => {
+    expect(displayWidth('basket')).toBe(6)
+    expect(displayWidth('籃子')).toBe(4)
+    expect(displayWidth('かご 0/3')).toBe(8)
+    expect(displayWidth('바구니')).toBe(6)
+  })
+
+  test('fits the caption by dropping the accessory, basket, place and then coins, never the chore', async () => {
+    for (const { code } of LANGUAGES) {
+      const strings = STRINGS[code]
+      const selling = { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 12 } as const
+      const accessory = { text: strings.accessories[3], dropOrder: 4 }
+      const chore = { text: doingText(strings, selling, true), dropOrder: 0 }
+      const coins = { text: strings.coins(1234), dropOrder: 1 }
+      const parts = [
+        { text: cityForZone('Europe/Warsaw')?.names[code] ?? '', dropOrder: 2 },
+        accessory,
+        chore,
+        { text: strings.basket(2, BASKET_SIZE), dropOrder: 3 },
+        coins,
+      ]
+      const full = parts.map(part => part.text).join(CAPTION_SEPARATOR)
+      const essential = [chore.text, coins.text].join(CAPTION_SEPARATOR)
+      expect(fitCaption(parts, displayWidth(full))).toBe(full)
+      expect(fitCaption(parts, displayWidth(full) - 1)).not.toContain(accessory.text)
+      expect(fitCaption(parts, displayWidth(essential))).toBe(essential)
+      expect(fitCaption(parts, displayWidth(chore.text))).toBe(chore.text)
+      for (let columns = displayWidth(essential); columns <= displayWidth(full); columns += 1) {
+        expect(displayWidth(fitCaption(parts, columns)) <= columns).toBe(true)
+      }
+    }
+  })
+
+  test('stretches the stats bars into spare room without squeezing the garden', async () => {
+    const besideFrom = MIN_SCENE_COLUMNS + GAP + STATS_BLOCK_COLUMNS
+    expect(layoutFor(besideFrom, 20, true, FULL_USAGE).barCells).toBe(BAR_CELLS)
+    expect(layoutFor(MAX_SCENE_COLUMNS + GAP + STATS_BLOCK_COLUMNS, 20, true, FULL_USAGE).barCells).toBe(BAR_CELLS)
+    expect(layoutFor(250, 20, true, FULL_USAGE).barCells).toBe(MAX_BAR_CELLS)
+    for (let columns = besideFrom; columns <= 250; columns += 1) {
+      const layout = layoutFor(columns, 20, true, FULL_USAGE)
+      const roomy = layoutFor(columns + 1, 20, true, FULL_USAGE)
+      expect(layout.statsColumns - STATS_BLOCK_COLUMNS).toBe(layout.barCells - BAR_CELLS)
+      expect((roomy.sceneWidth ?? 0) >= (layout.sceneWidth ?? 0)).toBe(true)
+      expect(roomy.barCells >= layout.barCells).toBe(true)
     }
   })
 
@@ -170,7 +322,7 @@ describe('every terminal size', () => {
       const lastFlowerEdge = plotX(PLOT_COUNT - 1, width) + 1
       expect(lastFlowerEdge < width - 11).toBe(true)
       expect(plotX(1, width) - plotX(0, width) >= 4).toBe(true)
-      const selling = spotFor({ kind: 'selling', plot: -1, flower: 0, count: 0, earned: 0 }, 0, width)
+      const selling = spotFor({ kind: 'selling', plot: -1, flower: 0, stage: 0, count: 0, earned: 0 }, 0, width)
       expect(selling >= 0 && selling + 9 < width - 11).toBe(true)
       expect(sceneCells({ garden: freshGarden(), accessory: 0, claudeX: 4, facing: 0, frame: 0, isWorking: false, width }).length).toBe(
         Math.ceil((width * SCENE_ROWS * 12) / 3) * 4,
@@ -268,10 +420,10 @@ describe('languages', () => {
 
   test('describes every chore in every language', async () => {
     const jobs = [
-      { kind: 'planting', plot: 0, flower: 1, count: 0, earned: 0 },
-      { kind: 'watering', plot: 0, flower: 2, count: 0, earned: 0 },
-      { kind: 'harvesting', plot: 0, flower: 3, count: 0, earned: 0 },
-      { kind: 'selling', plot: -1, flower: 0, count: 3, earned: 9 },
+      { kind: 'planting', plot: 0, flower: 1, stage: 1, count: 0, earned: 0 },
+      { kind: 'watering', plot: 0, flower: 2, stage: 3, count: 0, earned: 0 },
+      { kind: 'harvesting', plot: 0, flower: 3, stage: BLOOM, count: 0, earned: 0 },
+      { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 9 },
     ] as const
     for (const { code } of LANGUAGES) {
       const strings = STRINGS[code]
@@ -280,9 +432,12 @@ describe('languages', () => {
       expect(doingText(strings, jobs[0], false)).toBe(strings.resting)
       expect(strings.accessories.length).toBe(ACCESSORIES.length)
     }
-    expect(doingText(STRINGS.ja, jobs[1], true)).toBe('ひまわりに水やり')
-    expect(doingText(STRINGS['zh-TW'], jobs[3], true)).toBe('賣出 3 朵')
-    expect(doingText(STRINGS.en, jobs[0], true)).toBe('planting tulip')
+    expect(doingText(STRINGS.ja, jobs[1], true)).toBe('ひまわりに水やり、つぼみ')
+    expect(doingText(STRINGS['zh-TW'], jobs[2], true)).toBe('摘薰衣草，盛開')
+    expect(doingText(STRINGS.en, { ...jobs[1], stage: 0 }, true)).toBe('watering sunflower')
+    expect(doingText(STRINGS['zh-TW'], jobs[3], true)).toBe('賣出 3 朵 +9 金幣')
+    expect(doingText(STRINGS.en, jobs[3], true)).toBe('selling 3, +9 coins')
+    expect(doingText(STRINGS.en, jobs[0], true)).toBe('planting tulip, seed')
   })
 
   test('loads an old save without English labels getting stuck', async () => {
@@ -291,6 +446,17 @@ describe('languages', () => {
     expect(loaded?.coins).toBe(7)
     expect(loaded?.job.kind).toBe('resting')
     expect(loadGarden({ nope: true })).toBe(null)
+  })
+
+  test('loads a garden saved before flowers got thirsty', async () => {
+    const { chores: _, ...old } = {
+      ...freshGarden(),
+      plots: Array.from({ length: PLOT_COUNT }, () => ({ stage: 2, kind: 1 })),
+    }
+    const loaded = loadGarden(old)
+    expect(loaded?.chores).toBe(0)
+    expect(loaded?.plots.every(plot => plot.thirst === 0 && plot.stage === 2)).toBe(true)
+    expect(work(loaded ?? freshGarden()).job.kind).toBe('watering')
   })
 })
 
@@ -374,11 +540,15 @@ describe('commands', () => {
 
 describe('starting a session', () => {
   const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
-  const quietWorld = (on: On) => {
+  const quietWorld = (on: On, weatherCode?: number) => {
     on('session.start', ($, e) => ({ cwd: e.cwd }))
     on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } }))
     on('command.register', ($, e) => ({ value: { command: e.name } }))
-    on('http.fetch', () => ({ deny: 'offline' }))
+    on('http.fetch', () =>
+      weatherCode === undefined
+        ? { deny: 'offline' }
+        : { value: { ok: true, status: 200, headers: {}, text: `{"current":{"weather_code":${weatherCode}}}` } },
+    )
   }
 
   test('guesses the language from the time zone when the computer gives none', async ($, on) => {
@@ -394,6 +564,54 @@ describe('starting a session', () => {
     const expected = STRINGS[detectLanguage([], zone)].basket(0, BASKET_SIZE)
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect(await band.find({ type: 'Text', text: new RegExp(expected) })).toBeDefined()
+    await band.unmount()
+  })
+
+  const growing = { ...freshGarden(), plots: Array.from({ length: PLOT_COUNT }, () => ({ stage: 2, kind: 0, thirst: 0 })) }
+  const chillsIn = async ($: Engine, on: On, code: number) => {
+    const clock = mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on, { garden: growing })
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    quietWorld(on, code)
+    on('tool.call', () => ({ result: 'ok', text: 'ok' }))
+
+    await $.session.start(START)
+    await clock.settle()
+    await $.tool.call({ tool: 'Read', file_path: 'a.md' })
+
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const isResting = (await band.find({ type: 'Text', text: /resting/ })) !== undefined
+    await band.unmount()
+    return isResting
+  }
+
+  test('rests through the snow instead of watering', async ($, on) => {
+    expect(await chillsIn($, on, 73)).toBe(true)
+  })
+
+  test('waters on a clear day', async ($, on) => {
+    expect(await chillsIn($, on, 0)).toBe(false)
+  })
+
+  test('draws the same Claude every frame after reloading in the middle of a turn', async ($, on) => {
+    const clock = mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on, { garden: { ...growing, job: { kind: 'watering', plot: 2, flower: 0, stage: 0, count: 0, earned: 0 } } })
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    quietWorld(on)
+    const blits: unknown[] = []
+    on('ui.blit', ($, e) => {
+      if ('cells' in e) blits.push(e.cells)
+      return { value: {} }
+    })
+
+    await $.session.start(START)
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    await clock.advance(200 * 60)
+    await band.redraw()
+
+    const scene = await band.find({ type: 'Raster', key: 'garden' })
+    expect(blits.length > 0).toBe(true)
+    expect(scene?.props.cells).toEqual(blits.at(-1))
     await band.unmount()
   })
 
