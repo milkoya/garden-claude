@@ -112,8 +112,6 @@ claude plugin install garden-claude@milkoya
 
 Start a new Claude Code session and your garden appears above the prompt.
 
-The same marketplace also has [Usage Tracking](https://github.com/milkoya/usage-tracking), a side panel with your daily and weekly cost and token charts: `claude plugin install usage-tracking@milkoya`.
-
 **Or by hand:** clone this repo into `~/.claude/mods/garden-claude`, then either run `claude --plugin-dir ~/.claude/mods`, or add this to `~/.claude/settings.json` so it loads every time:
 
 ```json
