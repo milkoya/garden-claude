@@ -1,0 +1,11 @@
+{
+  "name": "garden-claude",
+  "version": "0.1.0",
+  "description": "Garden Claude: a pixel-art Claude tends a flower garden above the prompt while the session works",
+  "author": { "name": "Mio" },
+  "homepage": "https://github.com/milkoya/garden-claude",
+  "repository": "https://github.com/milkoya/garden-claude",
+  "license": "MIT",
+  "keywords": ["pet", "pixel-art", "garden", "status-line"],
+  "types": "./types/index.d.ts"
+}
