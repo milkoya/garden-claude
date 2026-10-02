@@ -20,6 +20,8 @@ import {
   SCENE_ROWS,
   THIRSTY,
   accessoryFor,
+  coinsText,
+  dayOf,
   freshGarden,
   loadGarden,
   loadJob,
@@ -29,6 +31,7 @@ import {
   wanderGoal,
   seedOfId,
   WANDER_MS,
+  todayIn,
   work,
 } from '../hooks/garden'
 import type { Pace, Scene } from '../hooks/garden'
@@ -745,7 +748,7 @@ describe('starting a session', () => {
     store.set('coins', 100)
     for (let i = 0; i < 200 && store.get('coins') === 100; i += 1) await $.tool.call({ tool: 'Read', file_path: 'a.md' })
     expect((store.get('coins') as number) > 100).toBe(true)
-    expect([...store.keys()]).toEqual(['coins'])
+    expect([...store.keys()].sort()).toEqual(['coins', 'today'])
   })
 
   test('keeps the saved language after /resume switches to a conversation that never started', async ($, on) => {
@@ -1167,6 +1170,37 @@ describe('coins', () => {
     for (let i = 0; i < 48; i += 1) expected = step(expected)
     expect(expected.coins > 0).toBe(true)
     expect(store.get('coins') ?? 0).toBe(expected.coins)
+  })
+
+  test('counts the coins earned today, starting over each day', async () => {
+    expect(dayOf(Date.UTC(2026, 9, 2, 15), 'Asia/Taipei')).toBe('2026-10-02')
+    expect(dayOf(Date.UTC(2026, 9, 2, 17), 'Asia/Taipei')).toBe('2026-10-03')
+    expect(todayIn({ day: '2026-10-02', coins: 12 }, '2026-10-02')).toEqual({ day: '2026-10-02', coins: 12 })
+    expect(todayIn({ day: '2026-10-01', coins: 12 }, '2026-10-02')).toEqual({ day: '2026-10-02', coins: 0 })
+    expect(todayIn({ day: '2026-10-02', coins: -3 }, '2026-10-02')).toEqual({ day: '2026-10-02', coins: 0 })
+    expect(todayIn('broken', '2026-10-02')).toEqual({ day: '2026-10-02', coins: 0 })
+    expect(coinsText('933 coins', 12)).toBe('933 coins ↑12')
+    expect(coinsText('933 coins', 0)).toBe('933 coins')
+  })
+
+  test('shows the coins earned today beside the total, shared across sessions', async ($, on) => {
+    const day = dayOf(NOW, Intl.DateTimeFormat().resolvedOptions().timeZone)
+    const { store, clock } = coinWorld(on, { coins: 900, today: { day: 'long ago', coins: 50 } })
+    await $.session.start(START)
+    await clock.settle()
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    expect((await band.find({ type: 'Text', text: /coins/ }))?.text).not.toContain('↑')
+
+    for (let i = 0; i < 200 && store.get('coins') === 900; i += 1) await $.tool.call({ tool: 'Read', file_path: `${i}.md` })
+    const earned = (store.get('coins') as number) - 900
+    expect(earned > 0).toBe(true)
+    expect(store.get('today')).toEqual({ day, coins: earned })
+    expect((await band.find({ type: 'Text', text: /coins/ }))?.text).toContain(`${900 + earned} coins ↑${earned}`)
+
+    store.set('today', { day, coins: earned + 30 })
+    await clock.advance(60_000)
+    expect((await band.find({ type: 'Text', text: /coins/ }))?.text).toContain(`↑${earned + 30}`)
+    await band.unmount()
   })
 })
 

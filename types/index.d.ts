@@ -54,6 +54,8 @@ export type Prefs = { language: Language | 'auto' }
 
 export type Detected = { language: Language; timeZone: string }
 
+export type Today = { day: string; coins: number }
+
 export type Weather = { condition: Condition; city: string; isNight: boolean }
 
 declare module 'claude-code' {
@@ -62,6 +64,7 @@ declare module 'claude-code' {
       garden: Garden
       job: Job
       coins: number
+      today: Today
       room: Room | null
       membership: Membership | null
       hour: number

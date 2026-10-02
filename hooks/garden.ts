@@ -1,4 +1,4 @@
-import type { Condition, Garden, Job, Plot } from '../types'
+import type { Condition, Garden, Job, Plot, Today } from '../types'
 
 export const HOUR = 3_600_000
 export const PLOT_COUNT = 5
@@ -89,6 +89,22 @@ export const scramble = (n: number): number => {
 }
 
 export const hourOf = (now: number): number => Math.floor(now / HOUR)
+
+const dayFormats = new Map<string, Intl.DateTimeFormat>()
+
+export const dayOf = (now: number, timeZone: string): string => {
+  const format = dayFormats.get(timeZone) ?? new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  dayFormats.set(timeZone, format)
+  return format.format(now)
+}
+
+export const todayIn = (value: unknown, day: string): Today => {
+  const saved = typeof value === 'object' && value !== null ? (value as Partial<Today>) : {}
+  const coins = typeof saved.coins === 'number' && saved.coins >= 0 ? saved.coins : 0
+  return saved.day === day ? { day, coins } : { day, coins: 0 }
+}
+
+export const coinsText = (coins: string, today: number): string => (today > 0 ? `${coins} ↑${today}` : coins)
 
 export const accessoryFor = (hour: number): number => {
   const pick = scramble(hour) % ACCESSORIES.length

@@ -22,7 +22,7 @@ Six kinds of flowers grow here, each worth a different number of coins:
 
 daisy 2 · tulip 3 · lavender 3 · sunflower 4 · cornflower 4 · rose 5
 
-Every session plants a fresh garden, but your coins are saved and shared by all your sessions, so every sale adds to the same pot. 💰
+Every session plants a fresh garden, but your coins are saved and shared by all your sessions, so every sale adds to the same pot. 💰 Next to the total, `↑12` shows what you've earned today; it starts over at midnight.
 
 ## 👒 The wardrobe
 

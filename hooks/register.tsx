@@ -8,7 +8,10 @@ import {
   SCENE_ROWS,
   accessoryFor,
   freshGarden,
+  coinsText,
+  dayOf,
   hourOf,
+  todayIn,
   sceneCells,
   seedOfId,
   choreGoal,
@@ -72,6 +75,7 @@ import { WEATHER_REFRESH_MS, parseCondition, parseIsNight, weatherUrl } from './
 const garden = atom({ plugin: 'garden-claude', key: 'garden' } as const, freshGarden())
 const job = atom({ plugin: 'garden-claude', key: 'job' } as const, RESTING)
 const coins = atom({ plugin: 'garden-claude', key: 'coins' } as const, 0)
+const today = atom({ plugin: 'garden-claude', key: 'today' } as const, { day: '', coins: 0 })
 const room = atom({ plugin: 'garden-claude', key: 'room' } as const, null)
 const membership = atom({ plugin: 'garden-claude', key: 'membership' } as const, null)
 const hour = atom({ plugin: 'garden-claude', key: 'hour' } as const, -1)
@@ -84,6 +88,7 @@ const started = atom({ plugin: 'garden-claude', key: 'started' } as const, false
 
 const OLD_GARDEN_KEY = 'garden'
 const COINS_KEY = 'coins'
+const TODAY_KEY = 'today'
 const PREFS_KEY = 'prefs'
 const LANGUAGE_COMMAND = 'garden-claude-language'
 const LANGUAGE_PANE = 'garden-claude-language'
@@ -264,9 +269,15 @@ function startTimers($: EngineInterface) {
 
 const coinsIn = (value: unknown): number => (typeof value === 'number' && value >= 0 ? value : 0)
 
+async function dayNow($: EngineInterface): Promise<string> {
+  return dayOf(await $.clock.now(), (await read($, detected)).timeZone)
+}
+
 async function syncCoins($: EngineInterface) {
   const saved = coinsIn(await $.store.get(COINS_KEY))
   await update($, coins, current => (current >= saved ? current : saved))
+  const earnedToday = todayIn(await $.store.get(TODAY_KEY), await dayNow($))
+  await update($, today, current => (current.day === earnedToday.day && current.coins === earnedToday.coins ? current : earnedToday))
 }
 
 async function earn($: EngineInterface, earned: number) {
@@ -274,6 +285,10 @@ async function earn($: EngineInterface, earned: number) {
   const total = coinsIn(await $.store.get(COINS_KEY)) + earned
   await $.store.set(COINS_KEY, total)
   await update($, coins, () => total)
+  const saved = todayIn(await $.store.get(TODAY_KEY), await dayNow($))
+  const earnedToday = { day: saved.day, coins: saved.coins + earned }
+  await $.store.set(TODAY_KEY, earnedToday)
+  await update($, today, () => earnedToday)
 }
 
 async function migrate($: EngineInterface) {
@@ -899,6 +914,7 @@ export const register: Register = on => {
     await read($, minute)
     const hourly = await hourlyAccessory($)
     const purse = await read($, coins)
+    const earnedToday = await read($, today)
     const seat = await read($, membership)
     const saved = seat ? await read($, room) : null
     const stats: Usage = await read($, usage)
@@ -907,6 +923,7 @@ export const register: Register = on => {
     const language = languageOf(chosen, found)
     const strings = STRINGS[language]
     const city = cityForZone(found.timeZone)
+    const coinsShown = coinsText(strings.coins(purse), earnedToday.day === dayOf(now, found.timeZone) ? earnedToday.coins : 0)
     const sky = await skyNow($)
     const condition = sky?.condition ?? null
     const isNight = sky?.isNight ?? false
@@ -954,13 +971,13 @@ export const register: Register = on => {
     const sharedParts = current
       ? [
           { text: place, dropOrder: 2 },
-          { text: strings.coins(purse), dropOrder: 1 },
+          { text: coinsShown, dropOrder: 1 },
         ]
       : [
           { text: place, dropOrder: 2 },
           { text: strings.accessories[myAccessory] ?? strings.accessories[0], dropOrder: 4 },
           { text: myChore, dropOrder: KEEP },
-          { text: strings.coins(purse), dropOrder: 1 },
+          { text: coinsShown, dropOrder: 1 },
         ]
     const { hasTitle, details } = captionFor(TITLE, sharedParts, columns - badgeColumns)
 
