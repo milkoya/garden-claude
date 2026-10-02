@@ -131,7 +131,7 @@ Garden Claude keeps things gentle:
 ## 🌱 Install
 
 ```sh
-claude plugin marketplace add milkoya/garden-claude
+claude plugin marketplace add milkoya/mods
 claude plugin install garden-claude@milkoya
 ```
 
