@@ -90,6 +90,9 @@ export const fitCaption = (parts: readonly CaptionPart[], columns: number): stri
   return join(shown)
 }
 
+export const fitBadge = (tiers: readonly string[], keep: string, columns: number): string =>
+  tiers.find(tier => displayWidth(tier) + 1 + displayWidth(keep) <= columns) ?? tiers[tiers.length - 1] ?? ''
+
 export const captionFor = (title: string, parts: readonly CaptionPart[], columns: number) => {
   const titled = fitCaption(parts, columns - displayWidth(title))
   return displayWidth(title + titled) <= columns

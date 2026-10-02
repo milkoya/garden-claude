@@ -21,7 +21,7 @@ Six kinds of flowers grow here, each worth a different number of coins:
 
 daisy 2 · tulip 3 · lavender 3 · sunflower 4 · cornflower 4 · rose 5
 
-Your garden and coins are saved, so they're waiting for you in every new session. 💰
+Every session plants a fresh garden, but your coins are saved and shared by all your sessions, so every sale adds to the same pot. 💰
 
 ## 👒 The wardrobe
 
@@ -35,7 +35,31 @@ Claude puts on a new outfit every hour, and every outfit has its own idle animat
 - 🌸 **Flower crown**: the blossoms twinkle and swap colors
 - 🐰 **Bunny ears**: blushing cheeks and an ear that flops now and then
 
-When there's nothing to do, Claude rests in the shade: breathing, blinking and glancing around.
+When there's nothing to do, Claude strolls around the garden, stopping now and then to rest: breathing, blinking and glancing around.
+
+## 🏡 Garden together
+
+Run a few Claude Code sessions at once and their Claudes can share one garden. Up to three Claudes work side by side, each taking its own chore, so flowers grow and sell faster.
+
+```
+/garden-claude-room create
+```
+
+That opens a room and gives it a fruit for a code, like `MANGO`. There are 20 fruits, so up to 20 rooms can be open at once. In another session:
+
+```
+/garden-claude-room join MANGO
+```
+
+Now both sessions show the same garden with every Claude in it. The room's garden starts from the host's, the basket and coins are shared, and a Claude never tends a flower another one is already looking after.
+
+- **Who's who.** In a room, a badge at the start of the caption says whether you're the `HOST` or `JOINED`, with the code and how many Claudes are in. It turns to `HOST AWAY` while the host's session is closed. Below it, a line for each Claude shows its accessory and what it's doing, and yours is marked `you`.
+- **Pick your look.** In a room, `/garden-claude-accessory` lets you choose what your Claude wears, so everyone can tell the Claudes apart. Accessories someone else wears aren't offered.
+- **Leaving.** `/garden-claude-room leave` takes you back to your own garden. If the host leaves, the room closes and everyone goes home. A room holds three Claudes, and a seat stays saved for a few minutes for someone whose session closed.
+- **Restarting is fine.** Being idle never drops you. If the host closes their session, for example to update Claude Code, the room waits 5 minutes and `claude --resume` picks it back up. The others keep gardening in the meantime. `/clear` keeps your seat, and `/resume` takes you to whichever room the resumed conversation was in.
+- **Host away for good?** `/garden-claude-room host MANGO` takes over a room whose host has stepped away.
+
+Run `/garden-claude-room` on its own to see who's in your room. Rooms are for sessions on the same computer.
 
 ## 📊 Your stats, right next door
 
@@ -101,7 +125,7 @@ Garden Claude keeps things gentle:
 - **No location tracking.** It never looks up your IP address or asks where you are. "Auto" only reads your computer's time zone, right on your machine.
 - **One small request.** When it starts and every 30 minutes after, it asks [Open-Meteo](https://open-meteo.com), a free public weather service, for the weather at your time zone's location. Like any website, Open-Meteo sees that a request came in, but nothing else about you is sent.
 - **Your language stays local.** It's read from your computer and never sent anywhere.
-- **Saved on your machine.** Your garden, coins and settings are stored by Claude Code on your computer only.
+- **Saved on your machine.** Your coins, settings and rooms are stored by Claude Code on your computer only. Rooms connect sessions through that same local store, never over the network.
 
 ## 🌱 Install
 
@@ -125,7 +149,7 @@ Start a new Claude Code session and your garden appears above the prompt.
 ### Good to know
 
 - Garden Claude is built on Claude Code's **function hooks**, an early-access feature that's still rolling out. If your Claude Code doesn't load it yet, it will once the feature reaches you.
-- The pixel art draws in the **terminal**. The desktop app shows a one-line caption instead.
+- The pixel art draws in the **terminal**. The desktop app shows the caption instead, plus a line per Claude in a room.
 - It fits itself to your window:
   - **77+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
   - **46–76 columns:** the garden with a one-line stats bar underneath
@@ -142,6 +166,7 @@ Start a new Claude Code session and your garden appears above the prompt.
 | `hooks/places.ts` | Finding the city for a time zone |
 | `hooks/zones.ts` | Every time zone's location and city name in five languages, from the time zone database and Unicode CLDR |
 | `hooks/weather.ts` | Turning Open-Meteo's forecast into sunny, cloudy, rainy or snowy |
+| `hooks/room.ts` | Rooms: codes, seats, who's away, and who's busy with which flower |
 | `hooks/layout.ts` | How the band fits different window sizes |
 | `hooks/stats.ts` | The status board's bars and numbers |
 | `hooks/register.tsx` | The hooks, commands and pickers that connect it all to Claude Code |

@@ -29,25 +29,22 @@ export const flowerOf = (kind: number): Flower => FLOWERS[kind % FLOWERS.length]
 export const freshGarden = (): Garden => ({
   plots: Array.from({ length: PLOT_COUNT }, () => ({ stage: 0, kind: 0, thirst: 0 })),
   basket: [],
-  coins: 0,
   planted: 0,
   chores: 0,
-  job: { kind: 'resting', plot: 0, flower: 0, stage: 0, count: 0, earned: 0 },
 })
 
-export const isGarden = (value: unknown): value is Garden => {
-  const garden = value as Garden | null
-  return (
-    typeof garden === 'object' &&
-    garden !== null &&
-    Array.isArray(garden.plots) &&
-    garden.plots.length === PLOT_COUNT &&
-    Array.isArray(garden.basket) &&
-    typeof garden.coins === 'number' &&
-    typeof garden.planted === 'number' &&
-    typeof garden.job === 'object'
-  )
-}
+export const RESTING: Job = { kind: 'resting', plot: 0, flower: 0, stage: 0, count: 0, earned: 0 }
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+export const isGarden = (value: unknown): value is Garden =>
+  isObject(value) &&
+  Array.isArray(value.plots) &&
+  value.plots.length === PLOT_COUNT &&
+  value.plots.every(isObject) &&
+  Array.isArray(value.basket) &&
+  value.basket.every(kind => typeof kind === 'number') &&
+  typeof value.planted === 'number'
 
 const numberOr = (value: unknown, fallback: number): number => (typeof value === 'number' ? value : fallback)
 
@@ -59,12 +56,25 @@ const loadPlot = (saved: Partial<Plot>): Plot => ({
 
 export const loadGarden = (saved: unknown): Garden | null => {
   if (!isGarden(saved)) return null
-  const job = saved.job as Partial<Job>
   return {
-    ...saved,
     plots: saved.plots.map(loadPlot),
+    basket: saved.basket,
+    planted: saved.planted,
     chores: numberOr(saved.chores, 0),
-    job: typeof job.flower === 'number' ? { ...saved.job, stage: numberOr(job.stage, 0) } : freshGarden().job,
+  }
+}
+
+const JOB_KINDS: readonly Job['kind'][] = ['resting', 'planting', 'watering', 'harvesting', 'selling']
+
+export const loadJob = (saved: unknown): Job => {
+  if (!isObject(saved) || !JOB_KINDS.includes(saved.kind as Job['kind'])) return RESTING
+  return {
+    kind: saved.kind as Job['kind'],
+    plot: numberOr(saved.plot, 0),
+    flower: numberOr(saved.flower, 0),
+    stage: numberOr(saved.stage, 0),
+    count: numberOr(saved.count, 0),
+    earned: numberOr(saved.earned, 0),
   }
 }
 
@@ -95,12 +105,18 @@ const STALL_SPOT = PLOT_COUNT
 
 const spotOf = (job: Job): number => (job.plot < 0 ? STALL_SPOT : job.plot)
 
-const nearest = (plots: Plot[], from: number, wanted: (plot: Plot) => boolean): number =>
-  plots.reduce(
-    (best, plot, i) =>
-      wanted(plot) && (best < 0 || Math.abs(i - from) < Math.abs(best - from)) ? i : best,
-    -1,
-  )
+export type Help = { job: Job; busy?: readonly number[]; isStallBusy?: boolean }
+
+export type Chore = { garden: Garden; job: Job; earned: number }
+
+const isBesideBusy = (i: number, busy: readonly number[]): boolean => busy.some(plot => Math.abs(plot - i) === 1)
+
+const nearest = (plots: Plot[], from: number, busy: readonly number[], wanted: (plot: Plot) => boolean): number => {
+  const open = plots.flatMap((plot, i) => (wanted(plot) && !busy.includes(i) ? [i] : []))
+  const apart = open.filter(i => !isBesideBusy(i, busy))
+  const choices = apart.length > 0 ? apart : open
+  return choices.reduce((best, i) => (best < 0 || Math.abs(i - from) < Math.abs(best - from) ? i : best), -1)
+}
 
 export const THIRSTY = 8
 
@@ -108,16 +124,20 @@ const seedOf = (garden: Garden): number => scramble(garden.chores + 0x51ed)
 
 const NEARBY = 1.5
 const WHIM = 200
+const CROWDED = 4
 
 const thirstOf = (plot: Plot): number => (plot.thirst === 0 ? -THIRSTY : plot.thirst)
 
 const needOf = (plot: Plot, i: number, from: number, seed: number): number =>
   thirstOf(plot) - Math.abs(i - from) * NEARBY + (scramble(seed * PLOT_COUNT + i) % WHIM) / 100
 
-const thirstiest = (garden: Garden, from: number): number => {
+const thirstiest = (garden: Garden, from: number, busy: readonly number[]): number => {
   const seed = seedOf(garden)
-  const needs = garden.plots.map((plot, i) => needOf(plot, i, from, seed))
-  return needs.indexOf(Math.max(...needs))
+  const needs = garden.plots.map((plot, i) =>
+    busy.includes(i) ? -Infinity : needOf(plot, i, from, seed) - (isBesideBusy(i, busy) ? CROWDED : 0),
+  )
+  const best = Math.max(...needs)
+  return best === -Infinity ? -1 : needs.indexOf(best)
 }
 
 const job = (kind: Job['kind'], details: Partial<Omit<Job, 'kind'>> = {}): Job => ({
@@ -130,14 +150,15 @@ const job = (kind: Job['kind'], details: Partial<Omit<Job, 'kind'>> = {}): Job =
   ...details,
 })
 
-const water = (garden: Garden, index: number): Garden => {
+const done = (garden: Garden, chore: Job, earned = 0): Chore => ({ garden, job: chore, earned })
+
+const water = (garden: Garden, index: number): Chore => {
   const plot = garden.plots[index] ?? { stage: 1, kind: 0 }
   const stage = plot.stage + (scramble(seedOf(garden) + index) % 3 !== 0 ? 1 : 0)
-  return {
-    ...garden,
-    plots: tend(garden.plots, index, { stage, kind: plot.kind }),
-    job: job('watering', { plot: index, flower: plot.kind, stage }),
-  }
+  return done(
+    { ...garden, plots: tend(garden.plots, index, { stage, kind: plot.kind }) },
+    job('watering', { plot: index, flower: plot.kind, stage }),
+  )
 }
 
 const rainOn = (garden: Garden): Garden => {
@@ -151,52 +172,46 @@ const rainOn = (garden: Garden): Garden => {
   }
 }
 
-const rest = (garden: Garden): Garden => ({ ...garden, job: job('resting', { plot: garden.job.plot }) })
+const rest = (garden: Garden, previous: Job): Chore => done(garden, job('resting', { plot: previous.plot }))
 
-export const work = (previous: Garden, condition: Condition | null = null): Garden => {
-  if (condition === 'snowy') return rest(previous)
+export const work = (previous: Garden, condition: Condition | null, help: Help): Chore => {
+  const busy = help.busy ?? []
+  if (condition === 'snowy') return rest(previous, help.job)
   const isRaining = condition === 'rainy'
   const chored = { ...previous, chores: previous.chores + 1 }
   const garden = isRaining ? rainOn(chored) : chored
   const { plots, basket } = garden
-  const from = spotOf(garden.job)
+  const from = spotOf(help.job)
+  const isBasketFull = basket.length >= BASKET_SIZE
 
-  if (basket.length >= BASKET_SIZE) {
+  if (isBasketFull && !help.isStallBusy) {
     const earned = basket.reduce((sum, kind) => sum + flowerOf(kind).price, 0)
-    return {
-      ...garden,
-      basket: [],
-      coins: garden.coins + earned,
-      job: job('selling', { plot: -1, count: basket.length, earned }),
-    }
+    return done({ ...garden, basket: [] }, job('selling', { plot: -1, count: basket.length, earned }), earned)
   }
 
-  const parched = nearest(plots, from, plot => isGrowing(plot) && plot.thirst >= THIRSTY)
+  const parched = nearest(plots, from, busy, plot => isGrowing(plot) && plot.thirst >= THIRSTY)
   if (parched >= 0) return water(garden, parched)
 
-  const ripe = nearest(plots, from, plot => plot.stage >= BLOOM)
+  const ripe = isBasketFull ? -1 : nearest(plots, from, busy, plot => plot.stage >= BLOOM)
   if (ripe >= 0) {
     const kind = plots[ripe]?.kind ?? 0
-    return {
-      ...garden,
-      plots: tend(plots, ripe, { stage: 0, kind }),
-      basket: [...basket, kind],
-      job: job('harvesting', { plot: ripe, flower: kind, stage: BLOOM }),
-    }
+    return done(
+      { ...garden, plots: tend(plots, ripe, { stage: 0, kind }), basket: [...basket, kind] },
+      job('harvesting', { plot: ripe, flower: kind, stage: BLOOM }),
+    )
   }
 
-  const empty = nearest(plots, from, plot => plot.stage === 0)
+  const empty = nearest(plots, from, busy, plot => plot.stage === 0)
   if (empty >= 0) {
     const kind = scramble(garden.planted) % FLOWERS.length
-    return {
-      ...garden,
-      plots: tend(plots, empty, { stage: 1, kind }),
-      planted: garden.planted + 1,
-      job: job('planting', { plot: empty, flower: kind, stage: 1 }),
-    }
+    return done(
+      { ...garden, plots: tend(plots, empty, { stage: 1, kind }), planted: garden.planted + 1 },
+      job('planting', { plot: empty, flower: kind, stage: 1 }),
+    )
   }
 
-  return isRaining ? rest(garden) : water(garden, thirstiest(garden, from))
+  const thirsty = isRaining ? -1 : thirstiest(garden, from, busy)
+  return thirsty >= 0 ? water(garden, thirsty) : rest(garden, help.job)
 }
 
 export const MAX_SCENE_COLUMNS = 60
@@ -242,16 +257,46 @@ export const spotFor = (job: Job, current: number, width: number): number => {
   return plotX(job.plot, width) - 12
 }
 
+export type Claude = {
+  x: number
+  target: number
+  facing: number
+  accessory: number
+  job: Job
+  isWorking: boolean
+}
+
+export const WANDER_MS = 12_000
+const WANDER_LOOKBACK = 8
+const WANDER_EDGE = 2
+
+const isWanderWindow = (seed: number, window: number): boolean => scramble(seed * 31 + window) % 2 === 0
+
+const wanderSpot = (seed: number, window: number, width: number): number => {
+  const last = stallX(width) - 11
+  return WANDER_EDGE + (scramble(seed * 131 + window * 7919) % Math.max(1, last - WANDER_EDGE + 1))
+}
+
+export const wanderGoal = (seed: number, now: number, width: number, home: number): number => {
+  const window = Math.floor(now / WANDER_MS)
+  for (let back = 0; back < WANDER_LOOKBACK; back += 1) {
+    if (isWanderWindow(seed, window - back)) return wanderSpot(seed, window - back, width)
+  }
+  return home
+}
+
+export const seedOfId = (id: string): number => [...id].reduce((hash, char) => scramble(hash ^ (char.codePointAt(0) ?? 0)), 7)
+
 export type Scene = {
   garden: Garden
-  accessory: number
-  claudeX: number
-  facing: number
+  coins: number
+  claudes: readonly Claude[]
   frame: number
-  isWorking: boolean
   width: number
   weather?: Condition | null
 }
+
+type Actor = Claude & { frame: number; width: number }
 
 type Canvas = { pixels: Uint32Array; width: number; set: (x: number, y: number, color: number) => void }
 
@@ -438,18 +483,16 @@ export type Pose = {
   step: number
 }
 
-const isWalkingIn = (scene: Scene): boolean =>
-  spotFor(scene.garden.job, scene.claudeX, scene.width) !== scene.claudeX
+const isWalkingIn = (actor: Actor): boolean => actor.target !== actor.x
 
-const isChoringIn = (scene: Scene): boolean =>
-  scene.isWorking && scene.garden.job.kind !== 'resting' && !isWalkingIn(scene)
+const isChoringIn = (actor: Actor): boolean => actor.isWorking && actor.job.kind !== 'resting' && !isWalkingIn(actor)
 
-const idlePose = (scene: Scene): Pose => {
-  const cycle = scene.frame % IDLE_CYCLE
-  const isGrooving = ACCESSORIES[scene.accessory] === 'headphones'
+const idlePose = (actor: Actor): Pose => {
+  const cycle = actor.frame % IDLE_CYCLE
+  const isGrooving = ACCESSORIES[actor.accessory] === 'headphones'
   return {
     hop: false,
-    squash: isGrooving ? scene.frame % 4 < 2 : scene.frame % 8 >= 6,
+    squash: isGrooving ? actor.frame % 4 < 2 : actor.frame % 8 >= 6,
     isBlinking: cycle === 10 || cycle === 30 || cycle === 32,
     look: cycle >= 14 && cycle < 20 ? -1 : cycle >= 20 && cycle < 26 ? 1 : 0,
     armsUp: false,
@@ -457,10 +500,10 @@ const idlePose = (scene: Scene): Pose => {
   }
 }
 
-const chorePose = (scene: Scene): Pose => {
-  const beat = scene.frame % CHORE_CYCLE
+const chorePose = (actor: Actor): Pose => {
+  const beat = actor.frame % CHORE_CYCLE
   const base = { hop: false, squash: false, isBlinking: false, look: 1, armsUp: false, step: 0 }
-  switch (scene.garden.job.kind) {
+  switch (actor.job.kind) {
     case 'planting':
       return { ...base, squash: beat >= 2 && beat <= 4 }
     case 'watering':
@@ -476,18 +519,18 @@ const chorePose = (scene: Scene): Pose => {
   }
 }
 
-export const poseFor = (scene: Scene): Pose => {
-  if (isWalkingIn(scene)) {
+export const poseFor = (actor: Actor): Pose => {
+  if (isWalkingIn(actor)) {
     return {
       hop: false,
-      squash: scene.frame % 2 === 1,
+      squash: actor.frame % 2 === 1,
       isBlinking: false,
-      look: scene.facing,
+      look: actor.facing,
       armsUp: false,
-      step: scene.frame % 2,
+      step: actor.frame % 2,
     }
   }
-  return isChoringIn(scene) ? chorePose(scene) : idlePose(scene)
+  return isChoringIn(actor) ? chorePose(actor) : idlePose(actor)
 }
 
 const paintClaude = (c: Canvas, x: number, pose: Pose): number => {
@@ -535,11 +578,11 @@ const bunnyEar = (c: Canvas, left: number, head: number, isFolded: boolean, outw
   set(left + 1, head - 4, BUNNY)
 }
 
-const paintAccessory = (c: Canvas, x: number, head: number, scene: Scene) => {
+const paintAccessory = (c: Canvas, x: number, head: number, actor: Actor) => {
   const { set } = c
-  const { frame } = scene
+  const { frame } = actor
   const cycle = frame % IDLE_CYCLE
-  switch (ACCESSORIES[scene.accessory]) {
+  switch (ACCESSORIES[actor.accessory]) {
     case 'sunglasses': {
       for (const lens of [x + 1, x + 5]) {
         span(c, lens, lens + 2, head + 1, SHADES)
@@ -596,11 +639,11 @@ const paintAccessory = (c: Canvas, x: number, head: number, scene: Scene) => {
   }
 }
 
-const paintChore = (c: Canvas, scene: Scene, head: number) => {
+const paintChore = (c: Canvas, actor: Actor, head: number) => {
   const { set } = c
-  const { claudeX: x, frame, garden } = scene
+  const { x, frame, job } = actor
   const beat = frame % CHORE_CYCLE
-  switch (garden.job.kind) {
+  switch (job.kind) {
     case 'planting': {
       const arc = [
         [9, head + 2],
@@ -625,7 +668,7 @@ const paintChore = (c: Canvas, scene: Scene, head: number) => {
       return
     }
     case 'harvesting': {
-      const flower = flowerOf(garden.basket[garden.basket.length - 1] ?? 0)
+      const flower = flowerOf(job.flower)
       if (beat < 3) {
         set(x + 9, 7, STEM)
         set(x + 9, 6, flower.petal)
@@ -651,11 +694,14 @@ export const paint = (scene: Scene): Uint32Array => {
   if (weather) paintSky(c, weather, scene.frame)
   paintGround(c)
   garden.plots.forEach((plot, i) => paintPlot(c, plot, plotX(i, scene.width)))
-  paintStall(c, garden.basket, garden.coins, scene.frame)
+  paintStall(c, garden.basket, scene.coins, scene.frame)
   if (weather === 'snowy') paintSnowCover(c)
-  const head = paintClaude(c, scene.claudeX, poseFor(scene))
-  paintAccessory(c, scene.claudeX, head, scene)
-  if (isChoringIn(scene)) paintChore(c, scene, head)
+  scene.claudes.forEach(claude => {
+    const actor = { ...claude, frame: scene.frame, width: scene.width }
+    const head = paintClaude(c, actor.x, poseFor(actor))
+    paintAccessory(c, actor.x, head, actor)
+    if (isChoringIn(actor)) paintChore(c, actor, head)
+  })
   return c.pixels
 }
 

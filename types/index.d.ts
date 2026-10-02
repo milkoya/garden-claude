@@ -7,11 +7,25 @@ export type Job = { kind: JobKind; plot: number; flower: number; stage: number; 
 export type Garden = {
   plots: Plot[]
   basket: number[]
-  coins: number
   planted: number
   chores: number
-  job: Job
 }
+
+export type Away = { since: number }
+
+export type Member = {
+  id: string
+  seat: number
+  accessory: number
+  job: Job
+  jobAt: number
+  seen: number
+  away?: Away
+}
+
+export type Room = { code: string; host: string; garden: Garden; members: Member[] }
+
+export type Membership = { code: string }
 
 export type UsageWindow = { percent: number; resetsAt: string | null }
 
@@ -37,12 +51,17 @@ declare module 'claude-code' {
   interface PluginState {
     'garden-claude': {
       garden: Garden
+      job: Job
+      coins: number
+      room: Room | null
+      membership: Membership | null
       hour: number
       minute: number
       usage: Usage
       prefs: Prefs
       detected: Detected
       weather: Weather | null
+      started: boolean
     }
   }
 }
