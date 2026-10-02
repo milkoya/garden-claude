@@ -35,9 +35,9 @@ Claude puts on a new outfit every hour, and every outfit has its own idle animat
 
 When there's nothing to do, Claude rests in the shade: breathing, blinking and glancing around.
 
-## 📊 Your stats, garden style
+## 📊 Your stats, right next door
 
-Next to the garden sits a little status board in the same pixel style:
+Next to the garden sits a little status board:
 
 ```
 $8.70 · Opus 5.5
@@ -47,6 +47,8 @@ ctx ▆▆▆▁▁▁▁▁▁▁  32%
 ```
 
 That's the session cost, the model, how full the context is, and your 5-hour and 7-day usage with time until each resets. The bars turn from green to gold at 70% and to red at 90%.
+
+The board isn't pixel art like the garden: it's regular terminal text with chunky block bars, so the numbers stay easy to read.
 
 Since this covers what most status lines show, you may want to turn off your own `statusLine` setting so the numbers don't show twice.
 
