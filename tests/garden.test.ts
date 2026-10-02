@@ -6,6 +6,7 @@ import {
   ACCESSORIES,
   BASKET_SIZE,
   BLOOM,
+  CLAUDE_GAP,
   FLOWERS,
   HOUR,
   PLOT_COUNT,
@@ -28,6 +29,7 @@ import {
   paint,
   sceneCells,
   spotFor,
+  spreadGoals,
   wanderGoal,
   seedOfId,
   WANDER_MS,
@@ -1581,5 +1583,28 @@ describe('wandering', () => {
     expect(at('session-a')).toEqual(at('session-a'))
     expect(at('session-a')).not.toEqual(at('session-b'))
     expect(wanderGoal(seedOfId('session-a'), 5 * WANDER_MS + 1, MAX_SCENE_COLUMNS, 4)).toBe(wanderGoal(seedOfId('session-a'), 5 * WANDER_MS + 11_000, MAX_SCENE_COLUMNS, 4))
+  })
+
+  test('keeps wandering Claudes from standing on each other or on a working one', async () => {
+    const ids = ['session-a', 'session-b', 'session-c'].map(seedOfId)
+    const apart = (goals: readonly number[]) => goals.every((goal, i) => goals.every((other, j) => i === j || Math.abs(goal - other) >= CLAUDE_GAP))
+    for (const width of [MIN_SCENE_COLUMNS, 60, MAX_SCENE_COLUMNS]) {
+      const together = spreadGoals(ids.map(seed => ({ seed, goal: 20, isWandering: true })), width)
+      expect(apart(together)).toBe(true)
+      expect(together).toEqual(spreadGoals(ids.map(seed => ({ seed, goal: 20, isWandering: true })).reverse(), width).reverse())
+
+      const xs = ids.map(() => 20)
+      for (let window = 0; window < 300; window += 1) {
+        const goals = spreadGoals(ids.map((seed, i) => ({ seed, goal: wanderGoal(seed, window * WANDER_MS, width, xs[i] ?? 20), isWandering: true })), width)
+        expect(apart(goals)).toBe(true)
+        goals.forEach((goal, i) => (xs[i] = goal))
+      }
+
+      const working = plotX(1, width)
+      const [first, second, plot] = spreadGoals([{ seed: ids[0] ?? 0, goal: working, isWandering: true }, { seed: ids[1] ?? 0, goal: working + 2, isWandering: true }, { seed: ids[2] ?? 0, goal: working, isWandering: false }], width)
+      expect(plot).toBe(working)
+      expect(apart([first ?? 0, second ?? 0, plot ?? 0])).toBe(true)
+    }
+    expect(spreadGoals([{ seed: ids[0] ?? 0, goal: 3, isWandering: true }], MAX_SCENE_COLUMNS)).toEqual([3])
   })
 })

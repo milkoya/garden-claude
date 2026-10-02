@@ -19,6 +19,7 @@ import {
   phaseOf,
   stepPace,
   spotFor,
+  spreadGoals,
   wanderGoal,
   work,
 } from './garden'
@@ -191,21 +192,38 @@ const keyOf = (other: Other): string => `${other.jobAt}`
 
 const settledOf = (pace: Pace): number | null => (pace.arrivedAt === null ? null : frame - pace.arrivedAt)
 
-const goalOf = (job: Job, isBusy: boolean, id: string, pace: Pace, x: number, width: number): number =>
-  isBusy && job.kind !== 'resting' ? choreGoal(job, pace.isCarrying, x, width) : wanderGoal(seedOfId(id), clockNow, width, x)
+const isChoring = (job: Job, isBusy: boolean): boolean => isBusy && job.kind !== 'resting'
+
+const goalsOf = (view: View): number[] => {
+  const everyone = [
+    ...view.others.map(other => ({ id: other.id, job: other.job, isBusy: isBusy(other), pace: paceOf(other.id, keyOf(other)), x: otherX.get(other.id) ?? START_X })),
+    { id: myId ?? '', job: view.job, isBusy: isWorking, pace: paceOf(myId ?? '', view.jobKey), x: claudeX ?? START_X },
+  ]
+  return spreadGoals(
+    everyone.map(claude => ({
+      seed: seedOfId(claude.id),
+      goal: isChoring(claude.job, claude.isBusy)
+        ? choreGoal(claude.job, claude.pace.isCarrying, claude.x, view.width)
+        : wanderGoal(seedOfId(claude.id), clockNow, view.width, claude.x),
+      isWandering: !isChoring(claude.job, claude.isBusy),
+    })),
+    view.width,
+  )
+}
 
 const sceneOf = (view: View) => {
   const mine = paceOf(myId ?? '', view.jobKey)
+  const goals = goalsOf(view)
   return {
     garden: view.garden,
     coins: view.coins,
     claudes: [
-      ...view.others.map(other => {
+      ...view.others.map((other, i) => {
         const pace = paceOf(other.id, keyOf(other))
         const x = otherX.get(other.id) ?? START_X
         return {
           x,
-          target: goalOf(other.job, isBusy(other), other.id, pace, x, view.width),
+          target: goals[i] ?? x,
           facing: otherFacing.get(other.id) ?? 0,
           accessory: other.accessory,
           job: other.job,
@@ -217,7 +235,7 @@ const sceneOf = (view: View) => {
       }),
       {
         x: claudeX ?? START_X,
-        target: goalOf(view.job, isWorking, myId ?? '', mine, claudeX ?? START_X, view.width),
+        target: goals[view.others.length] ?? claudeX ?? START_X,
         facing,
         accessory: view.accessory,
         job: view.job,
@@ -239,7 +257,8 @@ async function tick($: EngineInterface) {
   clockNow += FRAME_MS
   if (!shown || site === undefined || claudeX === undefined) return
   const mine = paceOf(myId ?? '', shown.jobKey)
-  const target = goalOf(shown.job, isWorking, myId ?? '', mine, claudeX, shown.width)
+  const goals = goalsOf(shown)
+  const target = goals[shown.others.length] ?? claudeX
   if (claudeX !== target) {
     facing = Math.sign(target - claudeX)
     claudeX = walk(claudeX, target)
@@ -247,10 +266,10 @@ async function tick($: EngineInterface) {
     facing = isWorking ? 1 : 0
   }
   paces.set(myId ?? '', stepPace(mine, shown.job, isWorking, claudeX, frame, shown.width))
-  for (const other of shown.others) {
+  for (const [i, other] of shown.others.entries()) {
     const pace = paceOf(other.id, keyOf(other))
     const x = otherX.get(other.id) ?? START_X
-    const goal = goalOf(other.job, isBusy(other), other.id, pace, x, shown.width)
+    const goal = goals[i] ?? x
     otherFacing.set(other.id, x !== goal ? Math.sign(goal - x) : isBusy(other) ? 1 : 0)
     otherX.set(other.id, walk(x, goal))
     paces.set(other.id, stepPace(pace, other.job, isBusy(other), walk(x, goal), frame, shown.width))

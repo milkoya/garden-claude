@@ -336,6 +336,44 @@ export const wanderGoal = (seed: number, now: number, width: number, home: numbe
   return home
 }
 
+export const CLAUDE_GAP = 9
+const ROOMY_GAPS = [14, 12, 10, CLAUDE_GAP]
+
+export type Stroller = { seed: number; goal: number; isWandering: boolean }
+
+const roomAt = (placed: readonly number[], x: number): number => Math.min(Infinity, ...placed.map(other => Math.abs(other - x)))
+
+const fitsAfter = (placed: readonly number[], lane: readonly number[], count: number): boolean => {
+  const taken = [...placed]
+  for (const x of lane) if (taken.length - placed.length < count && roomAt(taken, x) >= CLAUDE_GAP) taken.push(x)
+  return taken.length - placed.length >= count
+}
+
+export const spreadGoals = (strollers: readonly Stroller[], width: number): number[] => {
+  const laneTo = (last: number) => Array.from({ length: Math.max(1, last - WANDER_EDGE + 1) }, (_, i) => WANDER_EDGE + i)
+  const lanes = [laneTo(basketX(width) - CLAUDE_GAP), laneTo(stallX(width) - 13)]
+  const wide = lanes[1] ?? []
+  const placed = strollers.filter(stroller => !stroller.isWandering).map(stroller => stroller.goal)
+  const goals = strollers.map(stroller => stroller.goal)
+  const order = strollers
+    .map((stroller, i) => ({ ...stroller, i }))
+    .filter(stroller => stroller.isWandering)
+    .sort((a, b) => a.seed - b.seed || a.i - b.i)
+  order.forEach(({ goal, i }, n) => {
+    const nearestIn = (lane: readonly number[]) => [goal, ...lane].sort((a, b) => Math.abs(a - goal) - Math.abs(b - goal))
+    const nearest = nearestIn(wide)
+    const later = order.length - n - 1
+    const roomy = (lane: readonly number[], gap: number) => nearestIn(lane).find(x => roomAt(placed, x) >= gap && fitsAfter([...placed, x], lane, later))
+    const best =
+      lanes.flatMap(lane => ROOMY_GAPS.map(gap => () => roomy(lane, gap))).reduce<number | undefined>((pick, find) => pick ?? find(), undefined) ??
+      nearest.find(x => roomAt(placed, x) >= CLAUDE_GAP) ??
+      nearest.reduce((pick, x) => (roomAt(placed, x) > roomAt(placed, pick) ? x : pick))
+    placed.push(best)
+    goals[i] = best
+  })
+  return goals
+}
+
 export const phaseOf = (id: string): number => seedOfId(id) % IDLE_CYCLE
 
 export const seedOfId = (id: string): number => [...id].reduce((hash, char) => scramble(hash ^ (char.codePointAt(0) ?? 0)), 7)
