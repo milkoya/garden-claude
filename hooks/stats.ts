@@ -41,7 +41,7 @@ export const formatReset = (resetsAt: string | null, now: number): string => {
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return minutes % 60 === 0 ? `${hours}h` : `${hours}h${minutes % 60}m`
-  return `${Math.round(hours / 24)}d`
+  return hours % 24 === 0 ? `${hours / 24}d` : `${Math.floor(hours / 24)}d${hours % 24}h`
 }
 
 export const windowOf = (

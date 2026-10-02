@@ -130,6 +130,8 @@ describe('the stats', () => {
     expect(formatReset('2026-10-02T10:45:00Z', now)).toBe('45m')
     expect(formatReset('2026-10-02T14:30:00Z', now)).toBe('4h30m')
     expect(formatReset('2026-10-05T10:00:00Z', now)).toBe('3d')
+    expect(formatReset('2026-10-05T09:56:00Z', now)).toBe('2d23h')
+    expect(formatReset('2026-10-03T13:00:00Z', now)).toBe('1d3h')
     expect(formatReset(null, now)).toBe('')
   })
 

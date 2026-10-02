@@ -43,7 +43,7 @@ Next to the garden sits a little status board:
 $8.70 · Opus 5.5
 ctx ▆▆▆▁▁▁▁▁▁▁  32%
 5h  ▁▁▁▁▁▁▁▁▁▁   1% · 4h25m
-7d  ▆▆▆▁▁▁▁▁▁▁  34% · 3d
+7d  ▆▆▆▁▁▁▁▁▁▁  34% · 2d23h
 ```
 
 That's the session cost, the model, how full the context is, and your 5-hour and 7-day usage with time until each resets. The bars turn from green to gold at 70% and to red at 90%.
