@@ -12,14 +12,15 @@ export type Strings = {
   flowers: readonly [string, string, string, string, string, string]
   accessories: readonly [string, string, string, string, string]
   weather: Record<Condition, string>
+  clearNight: string
   resting: string
   planting: (flower: string) => string
   watering: (flower: string) => string
   harvesting: (flower: string) => string
+  storing: (flower: string) => string
   selling: (count: number, earned: number) => string
   stages: readonly [string, string, string, string]
   withStage: (chore: string, stage: string) => string
-  basket: (count: number, size: number) => string
   coins: (count: number) => string
   languageTitle: string
   autoLanguage: (name: string) => string
@@ -60,20 +61,26 @@ export type Strings = {
   freeAccessories: string
 }
 
+const hasFinalConsonant = (word: string): boolean => {
+  const last = word.codePointAt(word.length - 1) ?? 0
+  return last >= 0xac00 && last <= 0xd7a3 && (last - 0xac00) % 28 !== 0
+}
+
 const worn = (name: string): string => (/^(straw hat|flower crown)$/.test(name) ? `a ${name}` : name)
 
 const ENGLISH: Strings = {
   flowers: ['daisy', 'tulip', 'sunflower', 'lavender', 'rose', 'cornflower'],
   accessories: ['sunglasses', 'headphones', 'straw hat', 'flower crown', 'bunny ears'],
   weather: { sunny: 'sunny', cloudy: 'cloudy', rainy: 'rainy', snowy: 'snowy' },
+  clearNight: 'clear night',
   resting: 'resting',
   planting: flower => `planting ${flower}`,
   watering: flower => `watering ${flower}`,
   harvesting: flower => `picking ${flower}`,
+  storing: flower => `putting the ${flower} in the basket`,
   selling: (count, earned) => `selling ${count}, +${earned} coins`,
   stages: ['seed', 'sprout', 'bud', 'in bloom'],
   withStage: (chore, stage) => `${chore}, ${stage}`,
-  basket: (count, size) => `basket ${count}/${size}`,
   coins: count => `${count} coins`,
   languageTitle: 'Garden language',
   autoLanguage: name => `Auto (follows your computer: ${name})`,
@@ -123,14 +130,15 @@ const TRADITIONAL: Strings = {
   flowers: ['雛菊', '鬱金香', '向日葵', '薰衣草', '玫瑰', '矢車菊'],
   accessories: ['太陽眼鏡', '耳機', '草帽', '花冠', '兔耳朵'],
   weather: { sunny: '晴天', cloudy: '多雲', rainy: '下雨', snowy: '下雪' },
+  clearNight: '晴夜',
   resting: '休息中',
   planting: flower => `種${flower}`,
   watering: flower => `澆${flower}`,
   harvesting: flower => `摘${flower}`,
+  storing: flower => `把${flower}放進籃子`,
   selling: (count, earned) => `賣出 ${count} 朵 +${earned} 金幣`,
   stages: ['種子', '發芽', '花苞', '盛開'],
   withStage: (chore, stage) => `${chore}（${stage}）`,
-  basket: (count, size) => `籃子 ${count}/${size}`,
   coins: count => `${count} 金幣`,
   languageTitle: '花園語言',
   autoLanguage: name => `自動（跟著電腦設定：${name}）`,
@@ -180,14 +188,15 @@ const SIMPLIFIED: Strings = {
   flowers: ['雏菊', '郁金香', '向日葵', '薰衣草', '玫瑰', '矢车菊'],
   accessories: ['墨镜', '耳机', '草帽', '花冠', '兔耳朵'],
   weather: { sunny: '晴天', cloudy: '多云', rainy: '下雨', snowy: '下雪' },
+  clearNight: '晴夜',
   resting: '休息中',
   planting: flower => `种${flower}`,
   watering: flower => `浇${flower}`,
   harvesting: flower => `摘${flower}`,
+  storing: flower => `把${flower}放进篮子`,
   selling: (count, earned) => `卖出 ${count} 朵 +${earned} 金币`,
   stages: ['种子', '发芽', '花苞', '盛开'],
   withStage: (chore, stage) => `${chore}（${stage}）`,
-  basket: (count, size) => `篮子 ${count}/${size}`,
   coins: count => `${count} 金币`,
   languageTitle: '花园语言',
   autoLanguage: name => `自动（跟随系统：${name}）`,
@@ -237,14 +246,15 @@ const JAPANESE: Strings = {
   flowers: ['デイジー', 'チューリップ', 'ひまわり', 'ラベンダー', 'バラ', 'ヤグルマギク'],
   accessories: ['サングラス', 'ヘッドホン', '麦わら帽子', '花かんむり', 'うさ耳'],
   weather: { sunny: '晴れ', cloudy: 'くもり', rainy: '雨', snowy: '雪' },
+  clearNight: '晴れた夜',
   resting: '休憩中',
   planting: flower => `${flower}の種まき`,
   watering: flower => `${flower}に水やり`,
   harvesting: flower => `${flower}を収穫`,
+  storing: flower => `${flower}をかごへ`,
   selling: (count, earned) => `${count}本販売 +${earned} コイン`,
   stages: ['種', '芽', 'つぼみ', '満開'],
   withStage: (chore, stage) => `${chore}、${stage}`,
-  basket: (count, size) => `かご ${count}/${size}`,
   coins: count => `${count} コイン`,
   languageTitle: 'ガーデンの言語',
   autoLanguage: name => `自動（パソコンの設定：${name}）`,
@@ -294,14 +304,15 @@ const KOREAN: Strings = {
   flowers: ['데이지', '튤립', '해바라기', '라벤더', '장미', '수레국화'],
   accessories: ['선글라스', '헤드폰', '밀짚모자', '화관', '토끼 귀'],
   weather: { sunny: '맑음', cloudy: '흐림', rainy: '비', snowy: '눈' },
+  clearNight: '맑은 밤',
   resting: '휴식 중',
   planting: flower => `${flower} 심기`,
   watering: flower => `${flower} 물주기`,
   harvesting: flower => `${flower} 수확`,
+  storing: flower => `${flower}${hasFinalConsonant(flower) ? '을' : '를'} 바구니에 담기`,
   selling: (count, earned) => `${count}송이 판매 +${earned} 코인`,
   stages: ['씨앗', '새싹', '꽃봉오리', '만개'],
   withStage: (chore, stage) => `${chore}, ${stage}`,
-  basket: (count, size) => `바구니 ${count}/${size}`,
   coins: count => `${count} 코인`,
   languageTitle: '정원 언어',
   autoLanguage: name => `자동 (컴퓨터 설정: ${name})`,
@@ -375,6 +386,8 @@ export const doingText = (strings: Strings, job: Job, isWorking: boolean): strin
       return withStageOf(strings, job, strings.watering(flowerName(strings, job.flower)))
     case 'harvesting':
       return withStageOf(strings, job, strings.harvesting(flowerName(strings, job.flower)))
+    case 'storing':
+      return strings.storing(flowerName(strings, job.flower))
     case 'selling':
       return strings.selling(job.count, job.earned)
     default:

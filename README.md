@@ -4,7 +4,7 @@ A tiny pixel-art Claude who keeps a flower garden right above your Claude Code p
 
 Every time Claude uses a tool while helping you, it does a little garden chore too. You write code; Claude grows flowers. 🌱
 
-![Garden Claude planting, watering, picking and selling flowers](docs/garden.gif)
+![Garden Claude planting, watering, picking flowers, filling the basket and selling them](docs/garden.gif)
 
 ## 🧺 A day in the garden
 
@@ -12,8 +12,9 @@ Every time Claude uses a tool while helping you, it does a little garden chore t
 | --- | --- |
 | 🌰 **Plant** | Claude crouches and tosses a seed into an empty plot |
 | 💧 **Water** | Tip the watering can and the flower grows, sometimes after a few drinks: seed → sprout → bud → bloom |
-| 🌼 **Pick** | A bloom goes into the basket with a happy little hop |
-| 🪙 **Sell** | When the basket holds 3 flowers, Claude trots to the striped stall and sells them |
+| 🌼 **Pick** | Claude picks a bloom and holds it up with a happy little hop |
+| 🧺 **Basket** | Claude carries the flower over to the basket and drops it in with the others |
+| 🪙 **Sell** | When the basket holds 3 flowers, Claude picks it up, carries it to the striped stall and sells them |
 
 Claude looks after every flower, giving the thirstiest one nearby a drink first, so the garden blooms at its own easy pace. The caption under the garden says what's happening, like `watering tulip, bud` or `selling 3, +12 coins`.
 
@@ -82,9 +83,9 @@ Since this covers what most status lines show, you may want to turn off your own
 
 Garden Claude's sky follows the real weather where you are.
 
-![The garden in sunny, cloudy, rainy and snowy weather](docs/weather.gif)
+![The garden on a clear day, a clear night, and in cloudy, rainy and snowy weather](docs/weather.gif)
 
-- ☀️ **Sunny**: a twinkling sun
+- ☀️ **Clear**: a twinkling sun by day, and a crescent moon under twinkling stars at night
 - ☁️ **Cloudy**: fluffy clouds drifting by
 - 🌧️ **Rainy**: grey clouds and falling rain
 - ❄️ **Snowy**: snowflakes drift down and the ground (and the stall's roof) gets a soft white blanket
@@ -151,10 +152,10 @@ Start a new Claude Code session and your garden appears above the prompt.
 - Garden Claude is built on Claude Code's **function hooks**, an early-access feature that's still rolling out. If your Claude Code doesn't load it yet, it will once the feature reaches you.
 - The pixel art draws in the **terminal**. The desktop app shows the caption instead, plus a line per Claude in a room.
 - It fits itself to your window:
-  - **77+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
-  - **46–76 columns:** the garden with a one-line stats bar underneath
+  - **87+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
+  - **56–86 columns:** the garden with a one-line stats bar underneath
   - **Smaller:** just the stats and caption, as text
-  - When space is tight, the caption drops the accessory, basket and city first, so what Claude is doing always shows
+  - When space is tight, the caption drops the accessory and city first, so what Claude is doing always shows
 - Collapse the band anytime with `ctrl+x ctrl+a`.
 
 ## 🛠️ Tinkering

@@ -4,7 +4,6 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Condition, Detected, Garden, Job, Language, Member, Prefs, Room, Usage, UsageWindow, Weather } from '../types'
 import {
   ACCESSORIES,
-  BASKET_SIZE,
   RESTING,
   SCENE_ROWS,
   accessoryFor,
@@ -12,6 +11,10 @@ import {
   hourOf,
   sceneCells,
   seedOfId,
+  choreGoal,
+  freshPace,
+  phaseOf,
+  stepPace,
   spotFor,
   wanderGoal,
   work,
@@ -63,7 +66,8 @@ import {
   withoutMember,
 } from './room'
 import { barCells, emptyUsage, formatReset, prettyModel, windowOf } from './stats'
-import { WEATHER_REFRESH_MS, parseCondition, weatherUrl } from './weather'
+import type { Pace } from './garden'
+import { WEATHER_REFRESH_MS, parseCondition, parseIsNight, weatherUrl } from './weather'
 
 const garden = atom({ plugin: 'garden-claude', key: 'garden' } as const, freshGarden())
 const job = atom({ plugin: 'garden-claude', key: 'job' } as const, RESTING)
@@ -97,7 +101,7 @@ const DIM_GOLD = '#b8963a'
 const TITLE = 'Garden Claude '
 const MAX_QUEUED = 16
 
-const START_X = 4
+const START_X = 10
 
 type Other = { id: string; accessory: number; job: Job; jobAt: number }
 
@@ -109,6 +113,8 @@ type View = {
   others: readonly Other[]
   width: number
   weather: Weather['condition'] | null
+  isNight: boolean
+  jobKey: string
 }
 
 let claudeX: number | undefined
@@ -129,6 +135,7 @@ let queued = 0
 let queue: Promise<unknown> = Promise.resolve()
 const otherX = new Map<string, number>()
 const otherFacing = new Map<string, number>()
+const paces = new Map<string, Pace>()
 
 const languageOf = (chosen: Prefs, found: Detected): Language =>
   chosen.language === 'auto' ? found.language : chosen.language
@@ -170,51 +177,78 @@ const isBusy = (other: Other): boolean => clockNow - other.jobAt <= WORKING_MS
 
 const walk = (x: number, target: number): number => x + Math.sign(target - x)
 
-const goalOf = (job: Job, isBusy: boolean, id: string, x: number, width: number): number =>
-  isBusy && job.kind !== 'resting' ? spotFor(job, x, width) : wanderGoal(seedOfId(id), clockNow, width, x)
+const paceOf = (id: string, key: string): Pace => {
+  const pace = paces.get(id)
+  return pace?.key === key ? pace : freshPace(key)
+}
 
-const sceneOf = (view: View) => ({
-  garden: view.garden,
-  coins: view.coins,
-  claudes: [
-    ...view.others.map(other => ({
-      x: otherX.get(other.id) ?? START_X,
-      target: goalOf(other.job, isBusy(other), other.id, otherX.get(other.id) ?? START_X, view.width),
-      facing: otherFacing.get(other.id) ?? 0,
-      accessory: other.accessory,
-      job: other.job,
-      isWorking: isBusy(other),
-    })),
-    {
-      x: claudeX ?? START_X,
-      target: goalOf(view.job, isWorking, myId ?? '', claudeX ?? START_X, view.width),
-      facing,
-      accessory: view.accessory,
-      job: view.job,
-      isWorking,
-    },
-  ],
-  frame,
-  width: view.width,
-  weather: view.weather,
-})
+const keyOf = (other: Other): string => `${other.jobAt}`
+
+const settledOf = (pace: Pace): number | null => (pace.arrivedAt === null ? null : frame - pace.arrivedAt)
+
+const goalOf = (job: Job, isBusy: boolean, id: string, pace: Pace, x: number, width: number): number =>
+  isBusy && job.kind !== 'resting' ? choreGoal(job, pace.isCarrying, x, width) : wanderGoal(seedOfId(id), clockNow, width, x)
+
+const sceneOf = (view: View) => {
+  const mine = paceOf(myId ?? '', view.jobKey)
+  return {
+    garden: view.garden,
+    coins: view.coins,
+    claudes: [
+      ...view.others.map(other => {
+        const pace = paceOf(other.id, keyOf(other))
+        const x = otherX.get(other.id) ?? START_X
+        return {
+          x,
+          target: goalOf(other.job, isBusy(other), other.id, pace, x, view.width),
+          facing: otherFacing.get(other.id) ?? 0,
+          accessory: other.accessory,
+          job: other.job,
+          isWorking: isBusy(other),
+          isCarrying: pace.isCarrying,
+          settled: settledOf(pace),
+          phase: phaseOf(other.id),
+        }
+      }),
+      {
+        x: claudeX ?? START_X,
+        target: goalOf(view.job, isWorking, myId ?? '', mine, claudeX ?? START_X, view.width),
+        facing,
+        accessory: view.accessory,
+        job: view.job,
+        isWorking,
+        isCarrying: mine.isCarrying,
+        settled: settledOf(mine),
+        phase: phaseOf(myId ?? ''),
+      },
+    ],
+    frame,
+    width: view.width,
+    weather: view.weather,
+    isNight: view.isNight,
+  }
+}
 
 async function tick($: EngineInterface) {
   frame += 1
   clockNow += FRAME_MS
   if (!shown || site === undefined || claudeX === undefined) return
-  const target = goalOf(shown.job, isWorking, myId ?? '', claudeX, shown.width)
+  const mine = paceOf(myId ?? '', shown.jobKey)
+  const target = goalOf(shown.job, isWorking, myId ?? '', mine, claudeX, shown.width)
   if (claudeX !== target) {
     facing = Math.sign(target - claudeX)
     claudeX = walk(claudeX, target)
   } else {
     facing = isWorking ? 1 : 0
   }
+  paces.set(myId ?? '', stepPace(mine, shown.job, isWorking, claudeX, frame, shown.width))
   for (const other of shown.others) {
+    const pace = paceOf(other.id, keyOf(other))
     const x = otherX.get(other.id) ?? START_X
-    const goal = goalOf(other.job, isBusy(other), other.id, x, shown.width)
+    const goal = goalOf(other.job, isBusy(other), other.id, pace, x, shown.width)
     otherFacing.set(other.id, x !== goal ? Math.sign(goal - x) : isBusy(other) ? 1 : 0)
     otherX.set(other.id, walk(x, goal))
+    paces.set(other.id, stepPace(pace, other.job, isBusy(other), walk(x, goal), frame, shown.width))
   }
   await $.ui.blit({ requestId: site, key: RASTER, cells: sceneCells(sceneOf(shown)) })
 }
@@ -290,10 +324,11 @@ async function foundNow($: EngineInterface): Promise<Detected> {
   return detectedNow($).catch(() => read($, detected))
 }
 
-async function fetchCondition($: EngineInterface, city: City): Promise<Condition | null> {
+async function fetchWeather($: EngineInterface, city: City): Promise<Weather | null> {
   try {
     const response = await $.http.fetch(weatherUrl(city))
-    return response.ok ? parseCondition(response.text) : null
+    const condition = response.ok ? parseCondition(response.text) : null
+    return condition ? { condition, city: city.zone, isNight: parseIsNight(response.text) } : null
   } catch {
     return null
   }
@@ -301,14 +336,18 @@ async function fetchCondition($: EngineInterface, city: City): Promise<Condition
 
 async function refreshWeather($: EngineInterface) {
   const city = cityForZone((await read($, detected)).timeZone)
-  const condition = city ? await fetchCondition($, city) : null
-  await update($, weather, () => (city && condition ? { condition, city: city.zone } : null))
+  const fetched = city ? await fetchWeather($, city) : null
+  await update($, weather, () => fetched)
+}
+
+async function skyNow($: EngineInterface): Promise<Weather | null> {
+  const sky = await read($, weather)
+  const city = cityForZone((await read($, detected)).timeZone)
+  return sky && city && sky.city === city.zone ? sky : null
 }
 
 async function conditionNow($: EngineInterface): Promise<Condition | null> {
-  const sky = await read($, weather)
-  const city = cityForZone((await read($, detected)).timeZone)
-  return sky && city && sky.city === city.zone ? sky.condition : null
+  return (await skyNow($))?.condition ?? null
 }
 
 async function chooseLanguage($: EngineInterface, language: Language | 'auto') {
@@ -353,6 +392,7 @@ async function enterRoom($: EngineInterface, id: string, next: Room) {
   await update($, membership, () => ({ code: next.code }))
   otherX.clear()
   otherFacing.clear()
+  paces.clear()
 }
 
 async function goAlone($: EngineInterface) {
@@ -360,6 +400,7 @@ async function goAlone($: EngineInterface) {
   await update($, room, () => null)
   otherX.clear()
   otherFacing.clear()
+  paces.clear()
 }
 
 async function resumeSeat($: EngineInterface, id: string, isQuiet = false) {
@@ -866,7 +907,9 @@ export const register: Register = on => {
     const language = languageOf(chosen, found)
     const strings = STRINGS[language]
     const city = cityForZone(found.timeZone)
-    const condition = await conditionNow($)
+    const sky = await skyNow($)
+    const condition = sky?.condition ?? null
+    const isNight = sky?.isNight ?? false
     isWorking = e.props.isWorking
     const isTerminal = e.surface === 'terminal'
     const columns = e.props.bodyColumns
@@ -878,6 +921,7 @@ export const register: Register = on => {
     const myJob = me?.job ?? (await read($, job))
     const myAccessory = me?.accessory ?? hourly
     const plantedIn = current?.garden ?? (await read($, garden))
+    const jobKey = current && me ? `${me.jobAt}` : `${plantedIn.chores}:${myJob.kind}:${myJob.plot}`
     const others: Other[] = present
       .filter(member => member.id !== id)
       .map(member => ({ id: member.id, accessory: member.accessory, job: member.job, jobAt: member.jobAt }))
@@ -886,13 +930,13 @@ export const register: Register = on => {
     shown =
       layout.sceneWidth === null
         ? undefined
-        : { garden: plantedIn, coins: purse, accessory: myAccessory, job: myJob, others, width: layout.sceneWidth, weather: condition }
+        : { garden: plantedIn, coins: purse, accessory: myAccessory, job: myJob, others, width: layout.sceneWidth, weather: condition, isNight, jobKey }
     if (shown) {
       claudeX ??= spotFor(myJob, START_X, shown.width)
       for (const other of others) if (!otherX.has(other.id)) otherX.set(other.id, spotFor(other.job, START_X, shown.width))
     }
 
-    const place = city ? [city.names[language], condition ? strings.weather[condition] : null].filter(Boolean).join(' ') : ''
+    const place = city ? [city.names[language], condition ? (isNight && condition === 'sunny' ? strings.clearNight : strings.weather[condition]) : null].filter(Boolean).join(' ') : ''
     const myChore = doingText(strings, myJob, isWorking)
 
     const badge: Badge = (() => {
@@ -910,14 +954,12 @@ export const register: Register = on => {
     const sharedParts = current
       ? [
           { text: place, dropOrder: 2 },
-          { text: strings.basket(plantedIn.basket.length, BASKET_SIZE), dropOrder: 3 },
           { text: strings.coins(purse), dropOrder: 1 },
         ]
       : [
           { text: place, dropOrder: 2 },
           { text: strings.accessories[myAccessory] ?? strings.accessories[0], dropOrder: 4 },
           { text: myChore, dropOrder: KEEP },
-          { text: strings.basket(plantedIn.basket.length, BASKET_SIZE), dropOrder: 3 },
           { text: strings.coins(purse), dropOrder: 1 },
         ]
     const { hasTitle, details } = captionFor(TITLE, sharedParts, columns - badgeColumns)

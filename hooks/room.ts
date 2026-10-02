@@ -110,7 +110,7 @@ export const tidy = (room: Room, now: number, heardSince: number): Room => ({
 export const presentMembers = (room: Room, now: number, heardSince: number): Member[] =>
   room.members.filter(member => isPresent(member, now, heardSince)).sort((a, b) => a.seat - b.seat)
 
-export type Busy = { busy: number[]; isStallBusy: boolean }
+export type Busy = { busy: number[]; isStallBusy: boolean; held: number }
 
 export const busyFor = (room: Room, id: string, now: number, heardSince: number): Busy => {
   const others = presentMembers(room, now, heardSince).filter(
@@ -119,6 +119,7 @@ export const busyFor = (room: Room, id: string, now: number, heardSince: number)
   return {
     busy: others.flatMap(member => (member.job.plot >= 0 ? [member.job.plot] : [])),
     isStallBusy: others.some(member => member.job.kind === 'selling'),
+    held: room.members.filter(member => member.id !== id && member.job.kind === 'harvesting').length,
   }
 }
 

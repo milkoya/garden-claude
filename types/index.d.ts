@@ -1,8 +1,17 @@
 export type Plot = { stage: number; kind: number; thirst: number }
 
-export type JobKind = 'resting' | 'planting' | 'watering' | 'harvesting' | 'selling'
+export type JobKind = 'resting' | 'planting' | 'watering' | 'harvesting' | 'storing' | 'selling'
 
-export type Job = { kind: JobKind; plot: number; flower: number; stage: number; count: number; earned: number }
+export type Job = {
+  kind: JobKind
+  plot: number
+  flower: number
+  stage: number
+  count: number
+  earned: number
+  sold: number[]
+  from?: number
+}
 
 export type Garden = {
   plots: Plot[]
@@ -45,7 +54,7 @@ export type Prefs = { language: Language | 'auto' }
 
 export type Detected = { language: Language; timeZone: string }
 
-export type Weather = { condition: Condition; city: string }
+export type Weather = { condition: Condition; city: string; isNight: boolean }
 
 declare module 'claude-code' {
   interface PluginState {

@@ -6,9 +6,14 @@ import {
   ACCESSORIES,
   BASKET_SIZE,
   BLOOM,
+  FLOWERS,
   HOUR,
   PLOT_COUNT,
   RESTING,
+  basketSpot,
+  choreGoal,
+  freshPace,
+  stepPace,
   MAX_SCENE_COLUMNS,
   MIN_SCENE_COLUMNS,
   plotX,
@@ -26,7 +31,7 @@ import {
   WANDER_MS,
   work,
 } from '../hooks/garden'
-import type { Scene } from '../hooks/garden'
+import type { Pace, Scene } from '../hooks/garden'
 import { BAR_CELLS, barCells, formatReset, prettyModel } from '../hooks/stats'
 import {
   CAPTION_SEPARATOR,
@@ -45,7 +50,7 @@ import { cityForZone } from '../hooks/places'
 import { ZONES } from '../hooks/zones'
 
 const CITIES = Object.keys(ZONES).flatMap(zone => cityForZone(zone) ?? [])
-import { conditionFromCode, parseCondition, weatherUrl } from '../hooks/weather'
+import { conditionFromCode, parseCondition, parseIsNight, weatherUrl } from '../hooks/weather'
 import {
   FRUITS,
   GRACE_MS,
@@ -132,7 +137,7 @@ describe('the garden', () => {
       expect(garden.basket.length <= BASKET_SIZE).toBe(true)
       expect(garden.plots.every(plot => plot.stage <= BLOOM)).toBe(true)
     }
-    expect([...seen].sort()).toEqual(['harvesting', 'planting', 'selling', 'watering'])
+    expect([...seen].sort()).toEqual(['harvesting', 'planting', 'selling', 'storing', 'watering'])
     expect(garden.coins > 0).toBe(true)
   })
 
@@ -188,13 +193,18 @@ describe('the garden', () => {
       seen.add(garden.job.kind)
     }
     expect(seen.has('watering')).toBe(false)
-    expect([...seen].sort()).toEqual(['harvesting', 'planting', 'resting', 'selling'])
+    expect([...seen].sort()).toEqual(['harvesting', 'planting', 'resting', 'selling', 'storing'])
     expect(garden.coins > 0).toBe(true)
   })
 
   test('chills all day in the snow', async () => {
     let garden = farm()
     for (let i = 0; i < 40; i += 1) garden = step(garden)
+    while (garden.job.kind !== 'harvesting') garden = step(garden)
+    const stored = step(garden, 'snowy')
+    expect(stored.job.kind).toBe('storing')
+    expect(stored.basket).toEqual([...garden.basket, garden.job.flower])
+    garden = stored
     const before = garden
     for (let i = 0; i < 50; i += 1) garden = step(garden, 'snowy')
     expect(garden.job.kind).toBe('resting')
@@ -250,10 +260,10 @@ describe('the animations', () => {
   })
 
   test('every chore moves while Claude works', async () => {
-    const kinds = ['planting', 'watering', 'harvesting', 'selling'] as const
+    const kinds = ['planting', 'watering', 'harvesting', 'storing', 'selling'] as const
     for (const kind of kinds) {
       const garden = { ...freshGarden(), basket: [1] }
-      const job = { kind, plot: 0, flower: 1, stage: 0, count: 3, earned: 9 }
+      const job = { kind, plot: kind === 'storing' || kind === 'selling' ? -1 : 0, flower: 1, stage: 0, count: 3, earned: 9, sold: [1, 2, 3] }
       const claudeX = spotFor(job, 4, MAX_SCENE_COLUMNS)
       const plain = ACCESSORIES.indexOf('a flower crown')
       expect(framesOf({ garden, job, accessory: plain, claudeX, facing: 1, isWorking: true, width: MAX_SCENE_COLUMNS }).size > 2).toBe(true)
@@ -321,10 +331,10 @@ describe('every terminal size', () => {
     expect(displayWidth('바구니')).toBe(6)
   })
 
-  test('fits the caption by dropping the accessory, basket, place and then coins, never the chore', async () => {
+  test('fits the caption by dropping the accessory, place and then coins, never the chore', async () => {
     for (const { code } of LANGUAGES) {
       const strings = STRINGS[code]
-      const selling = { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 12 } as const
+      const selling = { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 12, sold: [] } as Job
       const accessory = { text: strings.accessories[3], dropOrder: 4 }
       const chore = { text: doingText(strings, selling, true), dropOrder: 0 }
       const coins = { text: strings.coins(1234), dropOrder: 1 }
@@ -332,7 +342,6 @@ describe('every terminal size', () => {
         { text: cityForZone('Europe/Warsaw')?.names[code] ?? '', dropOrder: 2 },
         accessory,
         chore,
-        { text: strings.basket(2, BASKET_SIZE), dropOrder: 3 },
         coins,
       ]
       const full = parts.map(part => part.text).join(CAPTION_SEPARATOR)
@@ -363,11 +372,13 @@ describe('every terminal size', () => {
 
   test('keeps the plots, Claude and the stall apart at every garden width', async () => {
     for (let width = MIN_SCENE_COLUMNS; width <= MAX_SCENE_COLUMNS; width += 1) {
-      const lastFlowerEdge = plotX(PLOT_COUNT - 1, width) + 1
-      expect(lastFlowerEdge < width - 11).toBe(true)
+      const lastTilledEdge = plotX(PLOT_COUNT - 1, width) + 2
+      const basketLeft = basketSpot(width) + 9
+      expect(lastTilledEdge < basketLeft).toBe(true)
+      expect(basketLeft + 4 < width - 11).toBe(true)
       expect(plotX(1, width) - plotX(0, width) >= 4).toBe(true)
-      const selling = spotFor({ kind: 'selling', plot: -1, flower: 0, stage: 0, count: 0, earned: 0 }, 0, width)
-      expect(selling >= 0 && selling + 9 < width - 11).toBe(true)
+      const selling = spotFor({ ...RESTING, kind: 'selling', plot: -1 }, 0, width)
+      expect(selling > basketSpot(width) && selling + 8 < width - 11).toBe(true)
       expect(sceneCells(solo({ garden: freshGarden(), accessory: 0, claudeX: 4, facing: 0, isWorking: false, width })).length).toBe(
         Math.ceil((width * SCENE_ROWS * 12) / 3) * 4,
       )
@@ -382,8 +393,8 @@ describe('every terminal size', () => {
       [120, 20, true],
       [80, 20, true],
       [60, 20, true],
-      [46, 20, true],
-      [40, 20, false],
+      [56, 20, true],
+      [50, 20, false],
       [120, 6, false],
       [30, 2, false],
       [20, 1, false],
@@ -410,7 +421,7 @@ describe('the band', () => {
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect(await band.find({ key: 'garden' })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /ctx/ })).toBeDefined()
-    expect((await band.find({ type: 'Text', text: /basket/ }))?.text).toContain(
+    expect((await band.find({ type: 'Text', text: /coins/ }))?.text).toContain(
       STRINGS.en.accessories[accessoryFor(490_000)],
     )
     await band.unmount()
@@ -435,7 +446,7 @@ describe('the band', () => {
     await $.tool.call({ tool: 'Read', file_path: 'a.md' })
 
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
-    expect((await band.find({ type: 'Text', text: /basket/ }))?.text).toContain('planting ')
+    expect((await band.find({ type: 'Text', text: /coins/ }))?.text).toContain('planting ')
     await band.unmount()
   })
 })
@@ -465,11 +476,12 @@ describe('languages', () => {
 
   test('describes every chore in every language', async () => {
     const jobs = [
-      { kind: 'planting', plot: 0, flower: 1, stage: 1, count: 0, earned: 0 },
-      { kind: 'watering', plot: 0, flower: 2, stage: 3, count: 0, earned: 0 },
-      { kind: 'harvesting', plot: 0, flower: 3, stage: BLOOM, count: 0, earned: 0 },
-      { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 9 },
-    ] as const
+      { kind: 'planting', plot: 0, flower: 1, stage: 1, count: 0, earned: 0, sold: [] },
+      { kind: 'watering', plot: 0, flower: 2, stage: 3, count: 0, earned: 0, sold: [] },
+      { kind: 'harvesting', plot: 0, flower: 3, stage: BLOOM, count: 0, earned: 0, sold: [] },
+      { kind: 'selling', plot: -1, flower: 0, stage: 0, count: 3, earned: 9, sold: [] },
+      { kind: 'storing', plot: -1, flower: 1, stage: 0, count: 0, earned: 0, sold: [] },
+    ] as const satisfies readonly Job[]
     for (const { code } of LANGUAGES) {
       const strings = STRINGS[code]
       const texts = jobs.map(job => doingText(strings, job, true))
@@ -483,6 +495,9 @@ describe('languages', () => {
     expect(doingText(STRINGS['zh-TW'], jobs[3], true)).toBe('賣出 3 朵 +9 金幣')
     expect(doingText(STRINGS.en, jobs[3], true)).toBe('selling 3, +9 coins')
     expect(doingText(STRINGS.en, jobs[0], true)).toBe('planting tulip, seed')
+    expect(doingText(STRINGS.en, jobs[4], true)).toBe('putting the tulip in the basket')
+    expect(doingText(STRINGS.ko, jobs[4], true)).toBe('튤립을 바구니에 담기')
+    expect(doingText(STRINGS.ko, { ...jobs[4], flower: 0 }, true)).toBe('데이지를 바구니에 담기')
   })
 
   test('loads an old job without English labels getting stuck, and skips broken saves', async () => {
@@ -559,7 +574,7 @@ describe('weather', () => {
     const scene = { garden: freshGarden(), accessory: 0, claudeX: 4, facing: 0, isWorking: false, width: MAX_SCENE_COLUMNS }
     const groundRow = 10
     const white = (pixels: Uint32Array) =>
-      Array.from({ length: MAX_SCENE_COLUMNS }, (_, x) => pixels[groundRow * MAX_SCENE_COLUMNS + x]).filter(color => color === 0xf4f6fb).length
+      Array.from({ length: MAX_SCENE_COLUMNS }, (_, x) => pixels[groundRow * MAX_SCENE_COLUMNS + x]).filter(color => color === 0xf4f6fb || color === 0xd6e2f0).length
     expect(white(paint(solo({ ...scene, weather: 'snowy' }))) > MAX_SCENE_COLUMNS / 2).toBe(true)
     expect(white(paint(solo({ ...scene, weather: 'sunny' })))).toBe(0)
   })
@@ -576,7 +591,7 @@ describe('commands', () => {
     expect(set.text).toBe('Garden Claude はこれから日本語で話します。')
 
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
-    expect(await band.find({ type: 'Text', text: /かご/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /コイン/ })).toBeDefined()
     await band.unmount()
 
     const typo = await $.command.run({ ...RUN, command: 'garden-claude-language', args: 'klingon' })
@@ -601,7 +616,7 @@ const sharedStore = (on: On, saved: Record<string, unknown> = {}) => {
 
 describe('starting a session', () => {
   const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
-  const quietWorld = (on: On, weatherCode?: number) => {
+  const quietWorld = (on: On, weatherCode?: number, isDay = 1) => {
     on('session.start', ($, e) => ({ cwd: e.cwd }))
     on('session.id', () => ({ value: 'session-a' }))
     on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } }))
@@ -609,7 +624,7 @@ describe('starting a session', () => {
     on('http.fetch', () =>
       weatherCode === undefined
         ? { deny: 'offline' }
-        : { value: { ok: true, status: 200, headers: {}, text: `{"current":{"weather_code":${weatherCode}}}` } },
+        : { value: { ok: true, status: 200, headers: {}, text: `{"current":{"weather_code":${weatherCode},"is_day":${isDay}}}` } },
     )
   }
 
@@ -623,7 +638,7 @@ describe('starting a session', () => {
 
     expect(detectLanguage([], 'Asia/Taipei')).toBe('zh-TW')
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const expected = STRINGS[detectLanguage([], zone)].basket(0, BASKET_SIZE)
+    const expected = STRINGS[detectLanguage([], zone)].coins(0)
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect(await band.find({ type: 'Text', text: new RegExp(expected) })).toBeDefined()
     await band.unmount()
@@ -692,7 +707,23 @@ describe('starting a session', () => {
     expect(store.get('coins')).toBe(7)
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
     expect(await band.find({ type: 'Text', text: /7 coins/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /basket 0\/3/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /basket/ })).toBeUndefined()
+    await band.unmount()
+  })
+
+  test('says it is a clear night after dark', async ($, on) => {
+    const clock = mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on)
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    quietWorld(on, 0, 0)
+
+    await $.session.start(START)
+    await clock.settle()
+
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const city = cityForZone(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    if (city) expect(await band.find({ type: 'Text', text: /clear night/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /sunny/ })).toBeUndefined()
     await band.unmount()
   })
 
@@ -732,7 +763,7 @@ describe('starting a session', () => {
     })
 
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
-    expect(await band.find({ type: 'Text', text: /かご/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /コイン/ })).toBeDefined()
     await band.unmount()
     await clock.advance(5_000)
     expect(registered).toContain('garden-claude-room')
@@ -747,7 +778,7 @@ describe('starting a session', () => {
     await $.session.start(START)
 
     const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
-    expect(await band.find({ type: 'Text', text: /かご/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /コイン/ })).toBeDefined()
     await band.unmount()
   })
 })
@@ -841,9 +872,20 @@ describe('room rules', () => {
       member('b', 2, 1, { job: watering }),
       member('c', 3, 2, { job: selling }),
     ])
-    expect(busyFor(room, 'a', NOW, 0)).toEqual({ busy: [2], isStallBusy: true })
-    expect(busyFor(room, 'a', NOW + 2 * 60_000, NOW + 2 * 60_000)).toEqual({ busy: [], isStallBusy: false })
+    expect(busyFor(room, 'a', NOW, 0)).toEqual({ busy: [2], isStallBusy: true, held: 0 })
+    expect(busyFor(room, 'a', NOW + 2 * 60_000, NOW + 2 * 60_000)).toEqual({ busy: [], isStallBusy: false, held: 0 })
     expect(busyFor(roomOf([member('a', 1, 0), member('b', 2, 1, { job: watering, away: { since: NOW } })]), 'a', NOW, 0).busy).toEqual([])
+  })
+
+  test('saves basket room for flowers other Claudes hold, even while they are away', async () => {
+    const picking = { ...RESTING, kind: 'harvesting' as const, plot: 1, flower: 2, stage: BLOOM, from: BLOOM }
+    const room = roomOf([
+      member('a', 1, 0),
+      member('b', 2, 1, { job: picking }),
+      member('c', 3, 2, { job: picking, seen: NOW - 10 * 60_000, jobAt: NOW - 10 * 60_000 }),
+    ])
+    expect(busyFor(room, 'a', NOW, 0).held).toBe(2)
+    expect(busyFor(room, 'b', NOW, 0).held).toBe(1)
   })
 
   test('frees accessories other Claudes are not wearing', async () => {
@@ -857,6 +899,200 @@ describe('room rules', () => {
     expect(isAbandoned(roomOf([member('a', 1, 0)]), NOW + 60 * 60_000)).toBe(false)
     expect(isAbandoned(roomOf([member('a', 1, 0)]), NOW + 25 * HOUR)).toBe(true)
     expect(isAbandoned(roomOf([member('b', 2, 0)], 'a'), NOW)).toBe(true)
+  })
+})
+
+describe('the basket', () => {
+  const WIDTH = MAX_SCENE_COLUMNS
+  const WICKER_LIGHT = 0xe2b97e
+  const WICKER = 0xc8955a
+  const at = (pixels: Uint32Array, x: number, y: number) => pixels[y * WIDTH + x]
+  const homeX = basketSpot(WIDTH) + 9
+  const counterX = WIDTH - 11 + 2
+  const garden = { ...freshGarden(), basket: [0, 1] }
+  const picture = (claude: Partial<Scene['claudes'][number]> & { job: Job }, frame = 0, inBasket = garden.basket) =>
+    paint({
+      garden: { ...garden, basket: inBasket },
+      coins: 0,
+      claudes: [{ x: 4, target: 4, facing: 1, accessory: 0, isWorking: true, ...claude }],
+      frame,
+      width: WIDTH,
+    })
+  const centers: readonly number[] = FLOWERS.map(flower => flower.center)
+  const flowersAtHome = (pixels: Uint32Array) =>
+    [[3, 4], [1, 5], [5, 5]].filter(([dx, y]) => centers.includes(at(pixels, homeX + (dx ?? 0), y ?? 0) ?? 0)).length
+
+  test('picking holds the flower, and the next chore puts it in the basket', async () => {
+    const ripe = { ...freshGarden(), plots: freshGarden().plots.map(plot => ({ ...plot, stage: BLOOM })) }
+    const picked = work(ripe, null, { job: RESTING })
+    expect(picked.job.kind).toBe('harvesting')
+    expect(picked.garden.basket).toEqual([])
+    const stored = work(picked.garden, null, { job: picked.job })
+    expect(stored.job.kind).toBe('storing')
+    expect(stored.garden.basket).toEqual([picked.job.flower])
+  })
+
+  test('leaves room in the basket for flowers other Claudes are holding', async () => {
+    const ripe = { ...freshGarden(), basket: [0, 1], plots: freshGarden().plots.map(plot => ({ ...plot, stage: BLOOM })) }
+    expect(work(ripe, null, { job: RESTING }).job.kind).toBe('harvesting')
+    expect(work(ripe, null, { job: RESTING, held: 1 }).job.kind).not.toBe('harvesting')
+  })
+
+  test('sits on the ground showing its flowers and stays out of the plots', async () => {
+    const pixels = picture({ job: RESTING, isWorking: false })
+    expect(at(pixels, homeX, 7)).toBe(WICKER_LIGHT)
+    expect(flowersAtHome(pixels)).toBe(2)
+    for (let width = MIN_SCENE_COLUMNS; width <= MAX_SCENE_COLUMNS; width += 1) {
+      expect(plotX(PLOT_COUNT - 1, width) + 2 < basketSpot(width) + 9).toBe(true)
+    }
+  })
+
+  test('shows the picked flower dropping in, then sitting in the basket', async () => {
+    const storing = { ...RESTING, kind: 'storing' as const, plot: -1, flower: 4 }
+    const spot = basketSpot(WIDTH)
+    const walking = picture({ x: spot - 6, target: spot, job: storing, settled: null }, 0, [0, 1, 4])
+    expect(flowersAtHome(walking)).toBe(2)
+    expect(at(walking, spot - 6 + 9, 3)).toBe(FLOWERS[4].center)
+    const holding = picture({ x: spot, target: spot, job: storing, settled: 0 }, 0, [0, 1, 4])
+    expect(flowersAtHome(holding)).toBe(2)
+    expect(at(holding, spot + 9, 2)).toBe(FLOWERS[4].center)
+    const falling = picture({ x: spot, target: spot, job: storing, settled: 2 }, 0, [0, 1, 4])
+    expect(flowersAtHome(falling)).toBe(2)
+    expect(at(falling, homeX + 3, 2)).toBe(FLOWERS[4].center)
+    const landing = picture({ x: spot, target: spot, job: storing, settled: 4 }, 0, [0, 1, 4])
+    expect(at(landing, homeX + 5, 4)).toBe(FLOWERS[4].center)
+    for (const frame of [0, 3, 6, 9]) {
+      const dropped = picture({ x: spot, target: spot, job: storing, settled: 6 + frame }, frame, [0, 1, 4])
+      expect(flowersAtHome(dropped)).toBe(3)
+      expect(at(dropped, homeX + 5, 5)).toBe(FLOWERS[4].center)
+    }
+  })
+
+  test('keeps a bloom on its plot until Claude gets there to pick it', async () => {
+    const harvesting = { ...RESTING, kind: 'harvesting' as const, plot: 2, flower: 3, stage: BLOOM, from: BLOOM }
+    const spot = spotFor(harvesting, 0, WIDTH)
+    const bloomAt = (pixels: Uint32Array) => at(pixels, plotX(2, WIDTH), 3)
+    expect(bloomAt(picture({ x: spot - 8, target: spot, job: harvesting }))).toBe(FLOWERS[3].center)
+    expect(bloomAt(picture({ x: spot, target: spot, job: harvesting }))).not.toBe(FLOWERS[3].center)
+  })
+
+  test('is fetched, carried to the stall and set on the counter to sell', async () => {
+    const selling = { ...RESTING, kind: 'selling' as const, plot: -1, count: 3, earned: 12, sold: [0, 1, 2] }
+    const spot = basketSpot(WIDTH)
+    const stall = spotFor(selling, 0, WIDTH)
+    expect(stall > spot).toBe(true)
+    const fetching = picture({ x: spot - 5, target: spot, job: selling, isCarrying: false }, 0, [])
+    expect(at(fetching, homeX, 7)).toBe(WICKER_LIGHT)
+    expect(flowersAtHome(fetching)).toBe(3)
+    const carrying = picture({ x: spot + 3, target: stall, job: selling, isCarrying: true }, 0, [])
+    expect(at(carrying, homeX + 2, 9)).not.toBe(0x9a6a3a)
+    expect(at(fetching, homeX + 2, 9)).toBe(0x9a6a3a)
+    expect([at(carrying, spot + 3 + 8, 6), at(carrying, spot + 3 + 8, 7)]).toContain(WICKER_LIGHT)
+    const selling2 = picture({ x: stall, target: stall, job: selling, isCarrying: true }, 0, [])
+    expect(at(selling2, counterX, 6)).toBe(WICKER)
+    expect(at(selling2, counterX + 3, 5)).toBe(FLOWERS[0].center)
+    expect(at(selling2, counterX + 1, 5)).toBe(FLOWERS[1].center)
+    expect(at(selling2, counterX + 3, 7)).not.toBe(0x4caf50)
+  })
+})
+
+describe('walking a chore', () => {
+  const WIDTH = MAX_SCENE_COLUMNS
+  const selling = { ...RESTING, kind: 'selling' as const, plot: -1, count: 3, earned: 9, sold: [0, 1, 2] }
+
+  const walkUntilThere = (pace: Pace, job: Job, from: number) => {
+    let x = from
+    let current = pace
+    const stops: number[] = []
+    for (let frame = 0; frame < 200 && current.arrivedAt === null; frame += 1) {
+      const goal = choreGoal(job, current.isCarrying, x, WIDTH)
+      x += Math.sign(goal - x)
+      current = stepPace(current, job, true, x, frame, WIDTH)
+      if (x === goal) stops.push(x)
+    }
+    return { pace: current, x, stops }
+  }
+
+  test('fetches the basket before carrying it to the stall', async () => {
+    const { pace, x, stops } = walkUntilThere(freshPace('sale-1'), selling, 4)
+    expect(stops[0]).toBe(basketSpot(WIDTH))
+    expect(pace.isCarrying).toBe(true)
+    expect(x).toBe(spotFor(selling, 0, WIDTH))
+  })
+
+  test('fetches the basket again for the next sale, even one that looks the same', async () => {
+    const first = walkUntilThere(freshPace('sale-1'), selling, 4)
+    const again = freshPace('sale-2')
+    expect(choreGoal(selling, again.isCarrying, first.x, WIDTH)).toBe(basketSpot(WIDTH))
+  })
+
+  test('remembers when it arrived, once, and only while working', async () => {
+    const watering = { ...RESTING, kind: 'watering' as const, plot: 2, flower: 1, stage: 3, from: 2 }
+    const spot = spotFor(watering, 0, WIDTH)
+    expect(stepPace(freshPace('w'), watering, false, spot, 5, WIDTH).arrivedAt).toBe(null)
+    const there = stepPace(freshPace('w'), watering, true, spot, 5, WIDTH)
+    expect(there.arrivedAt).toBe(5)
+    expect(stepPace(there, watering, true, spot, 9, WIDTH).arrivedAt).toBe(5)
+  })
+
+  test('shows a plot as it was until Claude gets there', async () => {
+    const watering = { ...RESTING, kind: 'watering' as const, plot: 2, flower: 1, stage: 3, from: 2 }
+    const garden = { ...freshGarden(), plots: freshGarden().plots.map((plot, i) => (i === 2 ? { ...plot, stage: 3, kind: 1 } : plot)) }
+    const spot = spotFor(watering, 0, WIDTH)
+    const budAt = (pixels: Uint32Array) => pixels[5 * WIDTH + plotX(2, WIDTH)]
+    const scene = (claude: Partial<Scene['claudes'][number]>) =>
+      paint({ garden, coins: 0, claudes: [{ x: spot, target: spot, facing: 1, accessory: 0, job: watering, isWorking: true, ...claude }], frame: 0, width: WIDTH })
+    expect(budAt(scene({ x: spot - 10, settled: null }))).not.toBe(FLOWERS[1].petal)
+    expect(budAt(scene({ settled: 0 }))).toBe(FLOWERS[1].petal)
+  })
+
+  test('keeps rain out from under the awning', async () => {
+    const stall = WIDTH - 11
+    for (let frame = 0; frame < 40; frame += 1) {
+      const pixels = paint({ garden: freshGarden(), coins: 0, claudes: [], frame, width: WIDTH, weather: 'rainy' })
+      for (let y = 3; y < 10; y += 1) {
+        for (let x = stall; x < WIDTH; x += 1) expect([0x4fa3e0, 0x9fd0f5]).not.toContain(pixels[y * WIDTH + x])
+      }
+    }
+  })
+
+  test('forgets a pick saved before flowers were carried to the basket', async () => {
+    expect(loadJob({ kind: 'harvesting', plot: 3, flower: 2, stage: BLOOM })).toEqual({ ...RESTING, plot: 3 })
+    expect(loadJob({ kind: 'harvesting', plot: 3, flower: 2, stage: BLOOM, from: BLOOM }).kind).toBe('harvesting')
+  })
+})
+
+describe('the night sky', () => {
+  const sky = (isNight: boolean, frame = 0) =>
+    paint({ garden: freshGarden(), coins: 0, claudes: [], frame, width: MAX_SCENE_COLUMNS, weather: 'sunny', isNight })
+  const top = (pixels: Uint32Array) => Array.from({ length: 3 * MAX_SCENE_COLUMNS }, (_, i) => pixels[i])
+
+  test('shows the sun by day and the moon and stars on a clear night', async () => {
+    expect(top(sky(false))).toContain(0xf7c531)
+    expect(top(sky(true))).not.toContain(0xf7c531)
+    expect(top(sky(true))).toContain(0xe8d890)
+    const frames = new Set(Array.from({ length: 30 }, (_, frame) => top(sky(true, frame)).join()))
+    expect(frames.size > 2).toBe(true)
+  })
+
+  test('keeps the stars off the stall', async () => {
+    const stall = MAX_SCENE_COLUMNS - 11
+    for (let frame = 0; frame < 30; frame += 1) {
+      const pixels = sky(true, frame)
+      for (let y = 0; y < 3; y += 1) {
+        for (let x = stall - 1; x < MAX_SCENE_COLUMNS; x += 1) {
+          expect([0xf2c84b, 0x8f96b8]).not.toContain(pixels[y * MAX_SCENE_COLUMNS + x])
+        }
+      }
+    }
+  })
+
+  test('reads day or night from the weather service', async () => {
+    expect(parseIsNight('{"current":{"weather_code":0,"is_day":0}}')).toBe(true)
+    expect(parseIsNight('{"current":{"weather_code":0,"is_day":1}}')).toBe(false)
+    expect(parseIsNight('not json')).toBe(false)
+    expect(weatherUrl(cityForZone('Asia/Taipei')!)).toContain('is_day')
+    expect(STRINGS.en.clearNight).toBe('clear night')
   })
 })
 
