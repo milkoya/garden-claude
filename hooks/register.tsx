@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
 import type { Condition, Detected, Garden, Job, Language, Member, Prefs, Room, Usage, UsageWindow, Weather } from '../types'
 import {
@@ -87,6 +87,7 @@ const detected = atom({ plugin: 'garden-claude', key: 'detected' } as const, { l
 const weather = atom({ plugin: 'garden-claude', key: 'weather' } as const, null)
 const started = atom({ plugin: 'garden-claude', key: 'started' } as const, false)
 const choring = atom({ plugin: 'garden-claude', key: 'choring' } as const, false)
+const inTerminal = atom({ plugin: 'garden-claude', key: 'inTerminal' } as const, true)
 
 const OLD_GARDEN_KEY = 'garden'
 const COINS_KEY = 'coins'
@@ -167,6 +168,10 @@ const loadSeat = (value: unknown): Seat | null => {
 }
 
 const ignore = () => undefined
+
+const isTypedAtTerminal = (e: Pick<CommandRunInput, 'origin'>): boolean => e.origin.kind === 'composer'
+
+const isOff = async ($: EngineInterface): Promise<boolean> => !(await read($, inTerminal))
 
 const notify = (text: string) => {
   notices = [...notices, text]
@@ -603,7 +608,7 @@ async function createCommand($: EngineInterface, strings: Strings): Promise<stri
   return strings.created(code)
 }
 
-async function joinCommand($: EngineInterface, strings: Strings, input: string): Promise<string> {
+async function joinCommand($: EngineInterface, strings: Strings, input: string, isAtTerminal: boolean): Promise<string> {
   const seat = await read($, membership)
   if (seat) return strings.alreadyIn(seat.code)
   const code = parseCode(input)
@@ -618,7 +623,7 @@ async function joinCommand($: EngineInterface, strings: Strings, input: string):
   if (refusal === 'full') return strings.roomFull(code)
   const id = await idNow($)
   await enterRoom($, id, { ...tidied, members: [...tidied.members, newMember(tidied, id, now, await hourlyAccessory($))] })
-  await openAccessoryPicker($, strings)
+  if (isAtTerminal) await openAccessoryPicker($, strings)
   return strings.joined(code)
 }
 
@@ -804,12 +809,14 @@ type MemberLine = { label: string; details: string; isMine: boolean }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await serially(() => begin($))
+    await update($, inTerminal, () => e.surface === 'terminal')
+    if (e.surface === 'terminal') await serially(() => begin($))
 
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const seat = await read($, membership)
     if (seat && e.reason === 'clear') isClearing = true
     if (seat && e.reason !== 'clear') await markAway($, seat.code, e.sessionId).catch(ignore)
@@ -817,10 +824,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: LANGUAGE_COMMAND }, async ($, e) => {
+  on('command.run', { command: LANGUAGE_COMMAND }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
     await serially(() => ensureStarted($))
     const strings = await stringsNow($)
     if (e.args.trim() === '') {
+      if (!isTypedAtTerminal(e)) return { text: languageList(strings) }
       await $.ui.open({ id: LANGUAGE_PANE, title: strings.languageTitle, focus: true, closeOnEscape: true, holdToasts: true, rows: LANGUAGES.length + 5 })
       return {}
     }
@@ -832,7 +841,8 @@ export const register: Register = on => {
     return { text: after.languageSet(languageName(language === 'auto' ? found.language : language)) }
   })
 
-  on('command.run', { command: ROOM_COMMAND }, async ($, e) => {
+  on('command.run', { command: ROOM_COMMAND }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const [action = '', ...rest] = e.args.trim().split(/\s+/)
     const argument = rest.join(' ')
     const text = await serially(async () => {
@@ -842,7 +852,7 @@ export const register: Register = on => {
         case 'create':
           return createCommand($, strings)
         case 'join':
-          return joinCommand($, strings, argument)
+          return joinCommand($, strings, argument, isTypedAtTerminal(e))
         case 'leave':
           return leaveCommand($, strings)
         case 'host':
@@ -854,23 +864,26 @@ export const register: Register = on => {
     return { text }
   })
 
-  on('command.run', { command: ACCESSORY_COMMAND }, async ($, e) =>
-    serially(async () => {
+  on('command.run', { command: ACCESSORY_COMMAND }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    return serially(async () => {
       await ensureStarted($)
       const strings = await stringsNow($)
       const mine = await myMember($)
       if (!mine) return { text: strings.accessoryAlone }
       if (e.args.trim() === '') {
+        if (!isTypedAtTerminal(e)) return { text: freeList(strings, mine.current, mine.id) }
         await openAccessoryPicker($, strings)
         return {}
       }
       const accessory = parseAccessory(e.args)
       if (accessory === null) return { text: `${strings.unknownAccessory(e.args.trim())}\n${freeList(strings, mine.current, mine.id)}` }
       return { text: await setAccessory($, strings, accessory) }
-    }),
-  )
+    })
+  })
 
   on('session.measure', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     await update($, usage, current => ({
       ...current,
       costUsd: e.cost?.usd ?? current.costUsd,
@@ -883,6 +896,7 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    if (await isOff($)) return yield* next(e)
     if (e.agentId === undefined) {
       const model = prettyModel(e.model)
       await update($, usage, current => (current.model === model ? current : { ...current, model }))
@@ -892,26 +906,30 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     await doChore($)
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     await doChore($)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const result = await next(e)
     if (e.agentId === undefined && (e.reason === 'answer' || e.reason === 'refusal')) await doChore($)
     return result
   })
 
-  on('ui.render', { component: 'Pane', requestId: LANGUAGE_PANE }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: LANGUAGE_PANE }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const chosen = await chosenNow($)
     const found = await foundNow($)
     const strings = STRINGS[languageOf(chosen, found)]
-    if (e.surface === 'mobile') {
+    if (e.surface !== 'terminal') {
       const { Text } = $.ui.resolve(e)
       return <Text>{languageList(strings)}</Text>
     }
@@ -935,12 +953,13 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: ACCESSORY_PANE }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: ACCESSORY_PANE }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const strings = await stringsNow($)
     const current = await read($, room)
     const id = myId ?? ''
     const me = current ? memberOf(current, id) : undefined
-    if (e.surface === 'mobile' || !current || !me) {
+    if (e.surface !== 'terminal' || !current || !me) {
       const { Text } = $.ui.resolve(e)
       return <Text>{current && me ? freeList(strings, current, id) : strings.accessoryAlone}</Text>
     }
@@ -962,7 +981,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey || e.surface !== 'terminal' || (await isOff($))) return next(e)
     startTimers($)
 
     const now = await $.clock.now()
@@ -985,9 +1004,8 @@ export const register: Register = on => {
     const isNight = sky?.isNight ?? false
     isWorking = e.props.isWorking
     const isBusyNow = isWorking || (await read($, choring))
-    const isTerminal = e.surface === 'terminal'
     const columns = e.props.bodyColumns
-    const layout = layoutFor(columns, e.props.maxRows, isTerminal, stats)
+    const layout = layoutFor(columns, e.props.maxRows, stats)
     const id = myId ?? ''
     const me = saved ? memberOf(saved, id) : undefined
     const current = saved && me ? saved : null
@@ -1026,7 +1044,7 @@ export const register: Register = on => {
     const badgeColumns = badge.text === '' ? 0 : displayWidth(badge.text) + 1
 
     const isMembersHidden = chosen.isMembersHidden === true
-    const membersButton = current && me && (!isTerminal || layout.below.includes('caption')) ? (isMembersHidden ? strings.members.show : strings.members.hide) : null
+    const membersButton = current && me && layout.below.includes('caption') ? (isMembersHidden ? strings.members.show : strings.members.hide) : null
     const buttonColumns = membersButton === null ? 0 : displayWidth(`[ ${membersButton} ]`) + 1
     const sharedParts = current && !isMembersHidden
       ? [
@@ -1041,9 +1059,9 @@ export const register: Register = on => {
         ]
     const { hasTitle, details } = captionFor(TITLE, sharedParts, columns - badgeColumns - buttonColumns)
 
-    const rowsUsed = isTerminal ? (shown ? SCENE_ROWS : 0) + layout.below.length : 1
+    const rowsUsed = (shown ? SCENE_ROWS : 0) + layout.below.length
     const spareRows = Math.max(0, e.props.maxRows - rowsUsed)
-    const hasCaption = !isTerminal || layout.below.includes('caption')
+    const hasCaption = layout.below.includes('caption')
     const memberLines: MemberLine[] = (() => {
       if (!current || !me || !hasCaption || isMembersHidden) return []
       const seated = [...current.members].sort((a, b) => a.seat - b.seat)
@@ -1108,15 +1126,6 @@ export const register: Register = on => {
         </Text>
       </Box>
     ))
-
-    if (!isTerminal) {
-      return (
-        <Box flexDirection="column">
-          {caption}
-          {members}
-        </Box>
-      )
-    }
 
     const { Raster } = $.ui.resolve(e)
     const lineBadge = !hasCaption && current ? badgeView : null

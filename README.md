@@ -150,7 +150,8 @@ Start a new Claude Code session and your garden appears above the prompt.
 ### Good to know
 
 - Garden Claude is built on Claude Code's **function hooks**, an early-access feature that's still rolling out. If your Claude Code doesn't load it yet, it will once the feature reaches you.
-- Garden Claude runs in the **Claude Code CLI** in your terminal.
+- Garden Claude runs only in the **Claude Code CLI**. In a session that didn't start in a terminal, like one in the desktop app, it switches itself off: no garden, no commands, no chores.
+- When the desktop app or your phone joins a terminal session through Remote Control, the garden stays in your terminal. The other screen shows Claude Code's usual view, and commands typed there answer in text instead of opening a picker.
 - It fits itself to your window:
   - **87+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
   - **56–86 columns:** the garden with a one-line stats bar underneath

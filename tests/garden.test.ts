@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, RenderElement } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -302,7 +302,7 @@ describe('every terminal size', () => {
   test('never lays out wider or taller than the band', async () => {
     for (let columns = 20; columns <= 250; columns += 1) {
       for (let maxRows = 1; maxRows <= 30; maxRows += 1) {
-        const layout = layoutFor(columns, maxRows, true, FULL_USAGE)
+        const layout = layoutFor(columns, maxRows, FULL_USAGE)
         const sceneRows = layout.sceneWidth === null ? 0 : SCENE_ROWS
         const sceneColumns = (layout.sceneWidth ?? 0) + (layout.isStatsBeside ? GAP + layout.statsColumns : 0)
         expect(sceneColumns <= columns).toBe(true)
@@ -313,7 +313,7 @@ describe('every terminal size', () => {
   })
 
   test('shortens the stats line by dropping the least useful readings first', async () => {
-    const at = (columns: number) => layoutFor(columns, 1, true, FULL_USAGE)
+    const at = (columns: number) => layoutFor(columns, 1, FULL_USAGE)
     expect(at(120).lineLabels).toEqual(['ctx', '5h', '7d'])
     expect(at(30).lineLabels).toEqual(['5h', '7d'])
     expect(at(20).lineLabels).toEqual(['5h'])
@@ -363,12 +363,12 @@ describe('every terminal size', () => {
 
   test('stretches the stats bars into spare room without squeezing the garden', async () => {
     const besideFrom = MIN_SCENE_COLUMNS + GAP + STATS_BLOCK_COLUMNS
-    expect(layoutFor(besideFrom, 20, true, FULL_USAGE).barCells).toBe(BAR_CELLS)
-    expect(layoutFor(MAX_SCENE_COLUMNS + GAP + STATS_BLOCK_COLUMNS, 20, true, FULL_USAGE).barCells).toBe(BAR_CELLS)
-    expect(layoutFor(250, 20, true, FULL_USAGE).barCells).toBe(MAX_BAR_CELLS)
+    expect(layoutFor(besideFrom, 20, FULL_USAGE).barCells).toBe(BAR_CELLS)
+    expect(layoutFor(MAX_SCENE_COLUMNS + GAP + STATS_BLOCK_COLUMNS, 20, FULL_USAGE).barCells).toBe(BAR_CELLS)
+    expect(layoutFor(250, 20, FULL_USAGE).barCells).toBe(MAX_BAR_CELLS)
     for (let columns = besideFrom; columns <= 250; columns += 1) {
-      const layout = layoutFor(columns, 20, true, FULL_USAGE)
-      const roomy = layoutFor(columns + 1, 20, true, FULL_USAGE)
+      const layout = layoutFor(columns, 20, FULL_USAGE)
+      const roomy = layoutFor(columns + 1, 20, FULL_USAGE)
       expect(layout.statsColumns - STATS_BLOCK_COLUMNS).toBe(layout.barCells - BAR_CELLS)
       expect((roomy.sceneWidth ?? 0) >= (layout.sceneWidth ?? 0)).toBe(true)
       expect(roomy.barCells >= layout.barCells).toBe(true)
@@ -432,14 +432,20 @@ describe('the band', () => {
     await band.unmount()
   })
 
-  test('shows only the caption on the desktop', async ($, on) => {
+  test('stays out of the way on every surface but the terminal', async ($, on) => {
     mock.clock(on, { now: 490_000 * HOUR })
     mock.store(on)
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, null, 'ENGINE BAND') as RenderElement
+    })
 
-    const desktop = await $.ui.mount({ plugin: 'garden-claude', surface: 'desktop', ...BAND })
-    expect(await desktop.find({ key: 'garden' })).toBeUndefined()
-    expect(await desktop.find({ type: 'Text', text: /Garden Claude/ })).toBeDefined()
-    await desktop.unmount()
+    for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
+      const band = await $.ui.mount({ plugin: 'garden-claude', surface, ...BAND })
+      expect(await band.find({ type: 'Text', text: 'ENGINE BAND' })).toBeDefined()
+      expect(await band.find({ type: 'Text', text: /Garden Claude/ })).toBeUndefined()
+      await band.unmount()
+    }
   })
 
   test('a tool call puts Claude to work', async ($, on) => {
@@ -1223,6 +1229,39 @@ describe('coins', () => {
     expect(store.get('coins') ?? 0).toBe(expected.coins)
   })
 
+  test('stays off for the whole session when it did not start in a terminal', async ($, on) => {
+    mock.clock(on, { now: NOW })
+    const store = sharedStore(on, { coins: 5 })
+    const registered: string[] = []
+    on('session.id', () => ({ value: 'session-a' }))
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => {
+      registered.push(e.name)
+      return { value: { command: e.name } }
+    })
+    on('http.fetch', () => ({ deny: 'offline' }))
+    on('tool.call', () => ({ result: 'ok', text: 'ok' }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, null, 'ENGINE BAND') as RenderElement
+    })
+
+    await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+    for (let i = 0; i < 60; i += 1) {
+      await $.turn.start({ text: 'hi', turnId: `turn-${i}` })
+      await $.tool.call({ tool: 'Read', file_path: `${i}.md` })
+      await $.turn.complete({ answer: 'hello', durationMs: 1000, isAborted: false, turnId: `turn-${i}`, reason: 'answer' })
+    }
+    expect(registered).toEqual([])
+    expect(store.get('coins')).toBe(5)
+    expect([...store.keys()]).toEqual(['coins'])
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: 'ENGINE BAND' })).toBeDefined()
+    await band.unmount()
+  })
+
   test('counts the coins earned today, starting over each day', async () => {
     expect(dayOf(Date.UTC(2026, 9, 2, 15), 'Asia/Taipei')).toBe('2026-10-02')
     expect(dayOf(Date.UTC(2026, 9, 2, 17), 'Asia/Taipei')).toBe('2026-10-03')
@@ -1326,6 +1365,22 @@ describe('gardening in a room', () => {
     expect(text).toContain(`HOST · ${code} 1/3`)
     expect(text).toContain('Claude 1 (host)')
     expect(text).toContain(' · you · ')
+  })
+
+  test('answers in text instead of opening a picker when a command comes from outside the terminal', async ($, on) => {
+    const host = member('host-a', 1, 2)
+    const { opened } = roomWorld(on, { 'room:MANGO': roomOf([host], 'host-a'), 'seat:host-a': { code: 'MANGO', accessory: 2 } }, 'guest-b')
+    await $.session.start(START)
+    const REMOTE = { ...RUN, origin: { kind: 'bridge' } } as const
+    expect((await $.command.run({ ...REMOTE, command: ROOM, args: 'join MANGO' })).text).toBe('You joined room MANGO.')
+    const accessories = await $.command.run({ ...REMOTE, command: 'garden-claude-accessory', args: '' })
+    expect(accessories.text).toContain(STRINGS.en.accessories[0])
+    const languages = await $.command.run({ ...REMOTE, command: 'garden-claude-language', args: '' })
+    expect(languages.text).toContain('English')
+    expect(opened).toEqual([])
+
+    await $.command.run({ ...RUN, command: 'garden-claude-language', args: '' })
+    expect(opened).toEqual(['garden-claude-language'])
   })
 
   test('hides the member lines behind a button and shows only your own caption until shown again', async ($, on) => {

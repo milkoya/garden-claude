@@ -100,12 +100,12 @@ export const captionFor = (title: string, parts: readonly CaptionPart[], columns
     : { hasTitle: false, details: fitCaption(parts, columns) }
 }
 
-export const layoutFor = (columns: number, maxRows: number, isTerminal: boolean, usage: Usage): Layout => {
+export const layoutFor = (columns: number, maxRows: number, usage: Usage): Layout => {
   const fit = lineFit(usage, columns)
   const hasSceneRows = maxRows >= SCENE_ROWS + 1
   const besideColumns = columns - GAP - STATS_BLOCK_COLUMNS
 
-  if (isTerminal && hasSceneRows && besideColumns >= MIN_SCENE_COLUMNS) {
+  if (hasSceneRows && besideColumns >= MIN_SCENE_COLUMNS) {
     const barCells = Math.min(MAX_BAR_CELLS, BAR_CELLS + Math.max(0, besideColumns - MAX_SCENE_COLUMNS))
     return {
       ...fit,
@@ -117,7 +117,7 @@ export const layoutFor = (columns: number, maxRows: number, isTerminal: boolean,
     }
   }
   const narrow = { ...fit, isStatsBeside: false, statsColumns: 0, barCells: BAR_CELLS }
-  if (isTerminal && hasSceneRows && columns >= MIN_SCENE_COLUMNS) {
+  if (hasSceneRows && columns >= MIN_SCENE_COLUMNS) {
     const below: Below[] = maxRows >= SCENE_ROWS + 2 ? ['statsLine', 'caption'] : ['statsLine']
     return { ...narrow, sceneWidth: sceneWidth(columns), below }
   }

@@ -75,6 +75,7 @@ declare module 'claude-code' {
       weather: Weather | null
       started: boolean
       choring: boolean
+      inTerminal: boolean
     }
   }
 }

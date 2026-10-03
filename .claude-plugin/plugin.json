@@ -1,6 +1,6 @@
 {
   "name": "garden-claude",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Garden Claude: a pixel-art Claude tends a flower garden above the prompt while the session works",
   "author": { "name": "Mio" },
   "homepage": "https://github.com/milkoya/garden-claude",
