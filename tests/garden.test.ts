@@ -1328,6 +1328,29 @@ describe('gardening in a room', () => {
     expect(text).toContain(' · you · ')
   })
 
+  test('hides the member lines behind a button and shows only your own caption until shown again', async ($, on) => {
+    const { store } = roomWorld(on, seeded([member('host-a', 1, 0), member('guest-b', 2, 4)]))
+    await $.session.start(START)
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const text = async () => (await band.findAll({ type: 'Text' })).map(found => found.text ?? '').join('')
+    expect(await text()).toContain('Claude 2')
+    expect(await band.find({ type: 'Button', key: 'members' })).toBeDefined()
+
+    await band.press({ key: 'members' })
+    const hidden = await text()
+    expect(hidden).toContain('HOST · MANGO 2/3')
+    expect(hidden).not.toContain('Claude 1 (host)')
+    expect(hidden).not.toContain('Claude 2')
+    expect(hidden).toContain(STRINGS.en.accessories[0])
+    expect(hidden).toContain(STRINGS.en.resting)
+    expect(store.get('prefs')).toMatchObject({ isMembersHidden: true })
+
+    await band.press({ key: 'members' })
+    expect(await text()).toContain('Claude 2')
+    expect(store.get('prefs')).toMatchObject({ isMembersHidden: false })
+    await band.unmount()
+  })
+
   test('joins with the code, opens the accessory picker and splits the work with the host', async ($, on) => {
     const watering = { ...RESTING, kind: 'watering' as const, plot: 2 }
     const host = member('host-a', 1, 2, { job: watering })

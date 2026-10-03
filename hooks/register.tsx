@@ -155,7 +155,7 @@ const loadPrefs = (value: unknown): Prefs | null => {
   const saved = value as Partial<Prefs> | null
   if (typeof saved !== 'object' || saved === null) return null
   const language = typeof saved.language === 'string' ? parseLanguage(saved.language) : null
-  return { language: language ?? 'auto' }
+  return { language: language ?? 'auto', isMembersHidden: saved.isMembersHidden === true }
 }
 
 type Seat = { code: string; accessory: number }
@@ -397,6 +397,11 @@ async function conditionNow($: EngineInterface): Promise<Condition | null> {
 
 async function chooseLanguage($: EngineInterface, language: Language | 'auto') {
   const next = await update($, prefs, current => ({ ...current, language }))
+  await $.store.set(PREFS_KEY, next)
+}
+
+async function toggleMembers($: EngineInterface) {
+  const next = await update($, prefs, current => ({ ...current, isMembersHidden: !current.isMembersHidden }))
   await $.store.set(PREFS_KEY, next)
 }
 
@@ -1020,7 +1025,10 @@ export const register: Register = on => {
     })()
     const badgeColumns = badge.text === '' ? 0 : displayWidth(badge.text) + 1
 
-    const sharedParts = current
+    const isMembersHidden = chosen.isMembersHidden === true
+    const membersButton = current && me && (!isTerminal || layout.below.includes('caption')) ? (isMembersHidden ? strings.members.show : strings.members.hide) : null
+    const buttonColumns = membersButton === null ? 0 : displayWidth(`[ ${membersButton} ]`) + 1
+    const sharedParts = current && !isMembersHidden
       ? [
           { text: place, dropOrder: 2 },
           { text: coinsShown, dropOrder: 1 },
@@ -1031,13 +1039,13 @@ export const register: Register = on => {
           { text: myChore, dropOrder: KEEP },
           { text: coinsShown, dropOrder: 1 },
         ]
-    const { hasTitle, details } = captionFor(TITLE, sharedParts, columns - badgeColumns)
+    const { hasTitle, details } = captionFor(TITLE, sharedParts, columns - badgeColumns - buttonColumns)
 
     const rowsUsed = isTerminal ? (shown ? SCENE_ROWS : 0) + layout.below.length : 1
     const spareRows = Math.max(0, e.props.maxRows - rowsUsed)
     const hasCaption = !isTerminal || layout.below.includes('caption')
     const memberLines: MemberLine[] = (() => {
-      if (!current || !me || !hasCaption) return []
+      if (!current || !me || !hasCaption || isMembersHidden) return []
       const seated = [...current.members].sort((a, b) => a.seat - b.seat)
       const kept = seated.length <= spareRows ? seated : [me, ...seated.filter(member => member.id !== id)].slice(0, spareRows)
       return seated
@@ -1061,7 +1069,7 @@ export const register: Register = on => {
         })
     })()
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
 
     const badgeView =
       badge.color === null ? null : (
@@ -1081,6 +1089,8 @@ export const register: Register = on => {
         <Text dimColor wrap="truncate-end">
           {details}
         </Text>
+        {membersButton !== null && <Text> </Text>}
+        {membersButton !== null && <Button key="members" label={membersButton} variant="primary" onPress={() => toggleMembers($)} />}
       </Box>
     )
 
