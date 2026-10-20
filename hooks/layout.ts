@@ -48,11 +48,14 @@ export const readingsOf = (usage: Usage, labels: readonly Label[] = ALL_LABELS):
 
 export const costText = (usage: Usage): string => (usage.costUsd === null ? '$—' : formatCost(usage.costUsd))
 
+export const modelText = (usage: Usage): string =>
+  usage.model && usage.effort ? `${usage.model} · ${usage.effort}` : (usage.model ?? '')
+
 export const lineText = (usage: Usage, hasModel: boolean, labels: readonly Label[] = ALL_LABELS): string =>
   [
     costText(usage),
     ...readingsOf(usage, labels).map(({ label, percent }) => `${label} ${percent}%`),
-    ...(hasModel && usage.model ? [usage.model] : []),
+    ...(hasModel && usage.model ? [modelText(usage)] : []),
   ].join(' · ')
 
 export const lineWidth = (usage: Usage, hasBars: boolean, hasModel: boolean, labels: readonly Label[] = ALL_LABELS): number =>

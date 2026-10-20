@@ -9,7 +9,7 @@ const GREEN = 0x5a9e3e
 const GOLD = 0xf2c84b
 const RED = 0xd94f4f
 
-export const emptyUsage = (): Usage => ({ costUsd: null, context: null, five: null, week: null, model: null })
+export const emptyUsage = (): Usage => ({ costUsd: null, context: null, five: null, week: null, model: null, effort: null })
 
 export const barColor = (percent: number): number => (percent >= 90 ? RED : percent >= 70 ? GOLD : GREEN)
 

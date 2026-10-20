@@ -37,6 +37,7 @@ import {
   fitCaption,
   layoutFor,
   lineText,
+  modelText,
   readingsOf,
 } from './layout'
 import { cityForZone } from './places'
@@ -899,7 +900,10 @@ export const register: Register = on => {
     if (await isOff($)) return yield* next(e)
     if (e.agentId === undefined) {
       const model = prettyModel(e.model)
-      await update($, usage, current => (current.model === model ? current : { ...current, model }))
+      const effort = e.effort === undefined ? null : String(e.effort)
+      await update($, usage, current =>
+        current.model === model && current.effort === effort ? current : { ...current, model, effort },
+      )
     }
 
     return yield* next(e)
@@ -1144,7 +1148,7 @@ export const register: Register = on => {
             <Text> {percent}%</Text>
           </Box>
         ))}
-        {stats.model && <Text dimColor> · {stats.model}</Text>}
+        {stats.model && <Text dimColor> · {modelText(stats)}</Text>}
       </Box>
     ) : (
       <Box key="stats" flexDirection="row">
@@ -1181,6 +1185,7 @@ export const register: Register = on => {
           </Text>
           {stats.model && <Text dimColor> · </Text>}
           {stats.model && <Text bold>{stats.model}</Text>}
+          {stats.model && stats.effort && <Text dimColor> · {stats.effort}</Text>}
         </Box>
         {limitRow('ctx', 'ctx-bar', stats.context === null ? null : { percent: stats.context, resetsAt: null })}
         {limitRow('5h ', 'five-bar', stats.five)}

@@ -67,13 +67,13 @@ Run `/garden-claude-room` on its own to see who's in your room. Rooms are for se
 Next to the garden sits a little status board:
 
 ```
-$8.70 · Opus 5.5
+$8.70 · Opus 5.5 · high
 ctx ▆▆▆▁▁▁▁▁▁▁  32%
 5h  ▁▁▁▁▁▁▁▁▁▁   1% · 4h25m
 7d  ▆▆▆▁▁▁▁▁▁▁  34% · 2d23h
 ```
 
-That's the session cost, the model, how full the context is, and your 5-hour and 7-day usage with time until each resets. The bars turn from green to gold at 70% and to red at 90%.
+That's the session cost, the model and its effort level, how full the context is, and your 5-hour and 7-day usage with time until each resets. The bars turn from green to gold at 70% and to red at 90%.
 
 The board isn't pixel art like the garden: it's regular terminal text with chunky block bars, so the numbers stay easy to read.
 

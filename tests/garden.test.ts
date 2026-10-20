@@ -48,6 +48,7 @@ import {
   fitCaption,
   layoutFor,
   lineWidth,
+  modelText,
 } from '../hooks/layout'
 import type { Condition, Garden, Job, Member, Room, Usage } from '../types'
 import { LANGUAGES, STRINGS, detectLanguage, doingText, parseLanguage } from '../hooks/i18n'
@@ -78,6 +79,7 @@ const FULL_USAGE: Usage = {
   five: { percent: 1, resetsAt: '2026-10-02T14:30:00Z' },
   week: { percent: 34, resetsAt: '2026-10-05T10:00:00Z' },
   model: 'Opus 5.5',
+  effort: 'xhigh',
 }
 
 const BAND = {
@@ -281,6 +283,12 @@ describe('the stats', () => {
     expect(prettyModel('claude-opus-5-5')).toBe('Opus 5.5')
     expect(prettyModel('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
     expect(prettyModel('claude-fable-5-1[1m]')).toBe('Fable 5.1')
+  })
+
+  test('shows the effort after the model when the model takes one', async () => {
+    expect(modelText(FULL_USAGE)).toBe('Opus 5.5 · xhigh')
+    expect(modelText({ ...FULL_USAGE, effort: null })).toBe('Opus 5.5')
+    expect(modelText({ ...FULL_USAGE, model: null })).toBe('')
   })
 
   test('counts down to a reset', async () => {
