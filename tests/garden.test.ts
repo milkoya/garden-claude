@@ -37,7 +37,7 @@ import {
   work,
 } from '../hooks/garden'
 import type { Pace, Scene } from '../hooks/garden'
-import { BAR_CELLS, barCells, formatReset, prettyModel } from '../hooks/stats'
+import { BAR_CELLS, accountOf, barCells, formatReset, parsePlan, planFor, prettyModel } from '../hooks/stats'
 import {
   CAPTION_SEPARATOR,
   GAP,
@@ -80,6 +80,24 @@ const FULL_USAGE: Usage = {
   week: { percent: 34, resetsAt: '2026-10-05T10:00:00Z' },
   model: 'Opus 5.5',
   effort: 'xhigh',
+}
+
+const FABLE_USAGE: Usage = { ...FULL_USAGE, fable: { percent: 7, resetsAt: '2026-10-05T10:00:00Z' } }
+
+const ULTRA_ACCOUNT = {
+  five_hour: null,
+  seven_day: { utilization: 5, resets_at: '2026-11-09T01:59:59.505172+00:00' },
+  limits: [
+    { kind: 'weekly_all', group: 'weekly', percent: 5, severity: 'normal', resets_at: '2026-11-09T01:59:59.505172+00:00', scope: null },
+    {
+      kind: 'weekly_scoped',
+      group: 'weekly',
+      percent: 7,
+      severity: 'normal',
+      resets_at: '2026-11-09T02:00:00.505329+00:00',
+      scope: { model: { id: null, display_name: 'Fable' }, surface: null },
+    },
+  ],
 }
 
 const BAND = {
@@ -304,18 +322,53 @@ describe('the stats', () => {
   test('packs one bar cell per segment', async () => {
     expect(barCells(27).length).toBe(Math.ceil((BAR_CELLS * 12) / 3) * 4)
   })
+
+  test('reads the Fable weekly limit and whether the plan has a 5-hour limit from the account', async () => {
+    expect(accountOf(JSON.stringify(ULTRA_ACCOUNT))).toEqual({
+      fable: { percent: 7, resetsAt: '2026-11-09T02:00:00.505329+00:00' },
+      hasFiveHour: false,
+    })
+    const max = {
+      five_hour: { utilization: 12, resets_at: '2026-11-06T15:00:00Z' },
+      limits: [{ kind: 'weekly_scoped', percent: 41.6, resets_at: 1_762_653_600, scope: { model: { display_name: 'Fable 5.1' } } }],
+    }
+    expect(accountOf(JSON.stringify(max))).toEqual({
+      fable: { percent: 42, resetsAt: new Date(1_762_653_600_000).toISOString() },
+      hasFiveHour: true,
+    })
+    const sonnetOnly = { limits: [{ kind: 'weekly_scoped', percent: 9, scope: { model: { display_name: 'Sonnet' } } }] }
+    expect(accountOf(JSON.stringify(sonnetOnly))).toEqual({ fable: null, hasFiveHour: null })
+    expect(accountOf('Bad gateway')).toBeNull()
+    expect(accountOf('[]')).toBeNull()
+  })
+
+  test('follows the account on auto and keeps a plan picked by hand', async () => {
+    expect(planFor('auto', { ...FULL_USAGE, hasFiveHour: false })).toBe('ultra')
+    expect(planFor(undefined, { ...FULL_USAGE, hasFiveHour: true })).toBe('max')
+    expect(planFor('auto', FULL_USAGE)).toBe('max')
+    expect(planFor('max', { ...FULL_USAGE, hasFiveHour: false })).toBe('max')
+    expect(planFor('ultra', FULL_USAGE)).toBe('ultra')
+    expect(parsePlan(' Ultra ')).toBe('ultra')
+    expect(parsePlan('AUTO')).toBe('auto')
+    expect(parsePlan('pro')).toBeNull()
+  })
 })
 
 describe('every terminal size', () => {
   test('never lays out wider or taller than the band', async () => {
-    for (let columns = 20; columns <= 250; columns += 1) {
-      for (let maxRows = 1; maxRows <= 30; maxRows += 1) {
-        const layout = layoutFor(columns, maxRows, FULL_USAGE)
-        const sceneRows = layout.sceneWidth === null ? 0 : SCENE_ROWS
-        const sceneColumns = (layout.sceneWidth ?? 0) + (layout.isStatsBeside ? GAP + layout.statsColumns : 0)
-        expect(sceneColumns <= columns).toBe(true)
-        expect(sceneRows + layout.below.length <= maxRows).toBe(true)
-        expect(lineWidth(FULL_USAGE, layout.hasLineBars, layout.hasLineModel, layout.lineLabels) <= columns).toBe(true)
+    for (const usage of [FULL_USAGE, FABLE_USAGE]) {
+      for (const plan of ['max', 'ultra'] as const) {
+        for (let columns = 20; columns <= 250; columns += 1) {
+          for (let maxRows = 1; maxRows <= 30; maxRows += 1) {
+            const layout = layoutFor(columns, maxRows, usage, plan)
+            const sceneRows = layout.sceneWidth === null ? 0 : SCENE_ROWS
+            const sceneColumns = (layout.sceneWidth ?? 0) + (layout.isStatsBeside ? GAP + layout.statsColumns : 0)
+            expect(sceneColumns <= columns).toBe(true)
+            expect(sceneRows + layout.below.length <= maxRows).toBe(true)
+            expect(2 + layout.blockLabels.length <= SCENE_ROWS).toBe(true)
+            expect(lineWidth(usage, layout.hasLineBars, layout.hasLineModel, layout.lineLabels) <= columns).toBe(true)
+          }
+        }
       }
     }
   })
@@ -326,6 +379,23 @@ describe('every terminal size', () => {
     expect(at(30).lineLabels).toEqual(['5h', '7d'])
     expect(at(20).lineLabels).toEqual(['5h'])
     expect(at(20).hasLineBars).toBe(false)
+  })
+
+  test('adds the Fable row under the 7-day one once the account reports it', async () => {
+    expect(layoutFor(120, 20, FULL_USAGE).blockLabels).toEqual(['ctx', '5h', '7d'])
+    expect(layoutFor(120, 20, FABLE_USAGE).blockLabels).toEqual(['ctx', '5h', '7d', 'fable'])
+    expect(layoutFor(120, 20, FABLE_USAGE).statsColumns).toBe(layoutFor(120, 20, FULL_USAGE).statsColumns + 2)
+    expect(layoutFor(40, 1, FABLE_USAGE).lineLabels).toEqual(['5h', '7d', 'fable'])
+    expect(layoutFor(30, 1, FABLE_USAGE).lineLabels).toEqual(['5h', '7d'])
+  })
+
+  test('leaves out the 5-hour reading for Ultra and keeps the 7-day one to the last', async () => {
+    const at = (columns: number, usage = FABLE_USAGE) => layoutFor(columns, 1, usage, 'ultra')
+    expect(layoutFor(120, 20, FABLE_USAGE, 'ultra').blockLabels).toEqual(['ctx', '7d', 'fable'])
+    expect(at(120).lineLabels).toEqual(['ctx', '7d', 'fable'])
+    expect(at(120, FULL_USAGE).lineLabels).toEqual(['ctx', '7d'])
+    expect(at(30).lineLabels).toEqual(['7d', 'fable'])
+    expect(at(20).lineLabels).toEqual(['7d'])
   })
 
   test('drops the title only when the chore and coins would not fit beside it', async () => {
@@ -647,6 +717,28 @@ describe('commands', () => {
     const typo = await $.command.run({ ...RUN, command: 'garden-claude-language', args: 'klingon' })
     expect(typo.text).toContain('zh-TW: 繁體中文')
   })
+
+  test('switches between the Max and Ultra limits and lists the plans for a typo', async ($, on) => {
+    mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on)
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    const hasFiveHourRow = async () => {
+      const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+      const row = await band.find({ type: 'Text', text: /^5h / })
+      await band.unmount()
+      return row !== undefined
+    }
+
+    expect(await hasFiveHourRow()).toBe(true)
+    const ultra = await $.command.run({ ...RUN, command: 'garden-claude-plan', args: 'ultra' })
+    expect(ultra.text).toBe("Garden Claude now shows the Ultra plan's usage limits.")
+    expect(await hasFiveHourRow()).toBe(false)
+    await $.command.run({ ...RUN, command: 'garden-claude-plan', args: 'max' })
+    expect(await hasFiveHourRow()).toBe(true)
+
+    const typo = await $.command.run({ ...RUN, command: 'garden-claude-plan', args: 'pro' })
+    expect(typo.text).toContain('ultra: weekly limits, no 5-hour limit')
+  })
 })
 
 const sharedStore = (on: On, saved: Record<string, unknown> = {}) => {
@@ -677,6 +769,33 @@ describe('starting a session', () => {
         : { value: { ok: true, status: 200, headers: {}, text: `{"current":{"weather_code":${weatherCode},"is_day":${isDay}}}` } },
     )
   }
+
+  test('asks the account for the Fable weekly limit and leaves out the 5-hour row it does not have', async ($, on) => {
+    const clock = mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on)
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('session.id', () => ({ value: 'session-a' }))
+    on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    on('session.authorize', () => ({ value: { handle: 'held-credential', kind: 'bearer' } }))
+    const asked: (string | undefined)[] = []
+    on('http.fetch', ($, e) => {
+      if (!e.url.startsWith('https://api.anthropic.com/')) return { deny: 'offline' }
+      asked.push(e.init?.auth)
+      return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(ULTRA_ACCOUNT) } }
+    })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toEqual(['held-credential'])
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: /^fable / })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /^7d / })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /^5h / })).toBeUndefined()
+    await band.unmount()
+  })
 
   test('guesses the language from the time zone when the computer gives none', async ($, on) => {
     mock.clock(on, { now: 490_000 * HOUR })

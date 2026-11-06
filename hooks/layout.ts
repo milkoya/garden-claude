@@ -1,4 +1,4 @@
-import type { Usage } from '../types'
+import type { Plan, Usage, UsageWindow } from '../types'
 import { MAX_SCENE_COLUMNS, MIN_SCENE_COLUMNS, SCENE_ROWS, sceneWidth } from './garden'
 import { BAR_CELLS, formatCost } from './stats'
 
@@ -9,6 +9,8 @@ export const MAX_BAR_CELLS = 20
 
 export type Below = 'caption' | 'statsLine'
 
+export type Label = 'ctx' | '5h' | '7d' | 'fable'
+
 export type Layout = {
   sceneWidth: number | null
   isStatsBeside: boolean
@@ -18,13 +20,21 @@ export type Layout = {
   hasLineBars: boolean
   hasLineModel: boolean
   lineLabels: readonly Label[]
+  blockLabels: readonly Label[]
 }
-
-export type Label = 'ctx' | '5h' | '7d'
 
 type Reading = { label: Label; percent: number }
 
-const ALL_LABELS: readonly Label[] = ['ctx', '5h', '7d']
+const PLAN_LABELS: Readonly<Record<Plan, readonly Label[]>> = {
+  max: ['ctx', '5h', '7d', 'fable'],
+  ultra: ['ctx', '7d', 'fable'],
+}
+
+const ALL_LABELS = PLAN_LABELS.max
+
+const DROP_ORDER: readonly Label[] = ['ctx', 'fable', '7d', '5h']
+
+const SHORT_LABEL_COLUMNS = 3
 
 const isWide = (codePoint: number): boolean =>
   (codePoint >= 0x1100 && codePoint <= 0x115f) ||
@@ -39,12 +49,30 @@ const isWide = (codePoint: number): boolean =>
 export const displayWidth = (text: string): number =>
   [...text].reduce((sum, char) => sum + (isWide(char.codePointAt(0) ?? 0) ? 2 : 1), 0)
 
+export const windowFor = (usage: Usage, label: Label): UsageWindow | null => {
+  switch (label) {
+    case 'ctx':
+      return usage.context === null ? null : { percent: usage.context, resetsAt: null }
+    case '5h':
+      return usage.five
+    case '7d':
+      return usage.week
+    case 'fable':
+      return usage.fable ?? null
+  }
+}
+
+export const labelsFor = (usage: Usage, plan: Plan): Label[] =>
+  PLAN_LABELS[plan].filter(label => label !== 'fable' || windowFor(usage, label) !== null)
+
+export const labelColumns = (labels: readonly Label[]): number =>
+  Math.max(SHORT_LABEL_COLUMNS, ...labels.map(label => label.length))
+
 export const readingsOf = (usage: Usage, labels: readonly Label[] = ALL_LABELS): Reading[] =>
-  [
-    { label: 'ctx' as const, percent: usage.context },
-    { label: '5h' as const, percent: usage.five?.percent ?? null },
-    { label: '7d' as const, percent: usage.week?.percent ?? null },
-  ].filter((reading): reading is Reading => reading.percent !== null && labels.includes(reading.label))
+  labels.flatMap(label => {
+    const window = windowFor(usage, label)
+    return window === null ? [] : [{ label, percent: window.percent }]
+  })
 
 export const costText = (usage: Usage): string => (usage.costUsd === null ? '$—' : formatCost(usage.costUsd))
 
@@ -63,19 +91,26 @@ export const lineWidth = (usage: Usage, hasBars: boolean, hasModel: boolean, lab
 
 type LineStep = Pick<Layout, 'hasLineBars' | 'hasLineModel' | 'lineLabels'>
 
-const SHORTEST_LINE: LineStep = { hasLineBars: false, hasLineModel: false, lineLabels: ['5h'] }
+const shortenings = (labels: readonly Label[]): Label[][] => {
+  const drops = DROP_ORDER.filter(label => labels.includes(label)).slice(0, -1)
+  return drops.map((_, i) => labels.filter(label => !drops.slice(0, i + 1).includes(label)))
+}
 
-const LINE_STEPS: readonly LineStep[] = [
-  { hasLineBars: true, hasLineModel: true, lineLabels: ALL_LABELS },
-  { hasLineBars: false, hasLineModel: true, lineLabels: ALL_LABELS },
-  { hasLineBars: false, hasLineModel: false, lineLabels: ALL_LABELS },
-  { hasLineBars: false, hasLineModel: false, lineLabels: ['5h', '7d'] },
-  SHORTEST_LINE,
-]
-
-const lineFit = (usage: Usage, columns: number): LineStep =>
-  LINE_STEPS.find(step => lineWidth(usage, step.hasLineBars, step.hasLineModel, step.lineLabels) <= columns) ??
-  SHORTEST_LINE
+const lineFit = (usage: Usage, labels: readonly Label[], columns: number): LineStep => {
+  const narrower = shortenings(labels)
+  const steps: LineStep[] = [
+    { hasLineBars: true, hasLineModel: true, lineLabels: labels },
+    { hasLineBars: false, hasLineModel: true, lineLabels: labels },
+    ...[labels, ...narrower].map(lineLabels => ({ hasLineBars: false, hasLineModel: false, lineLabels })),
+  ]
+  return (
+    steps.find(step => lineWidth(usage, step.hasLineBars, step.hasLineModel, step.lineLabels) <= columns) ?? {
+      hasLineBars: false,
+      hasLineModel: false,
+      lineLabels: narrower.at(-1) ?? labels,
+    }
+  )
+}
 
 export type CaptionPart = { text: string; dropOrder: number }
 
@@ -103,10 +138,12 @@ export const captionFor = (title: string, parts: readonly CaptionPart[], columns
     : { hasTitle: false, details: fitCaption(parts, columns) }
 }
 
-export const layoutFor = (columns: number, maxRows: number, usage: Usage): Layout => {
-  const fit = lineFit(usage, columns)
+export const layoutFor = (columns: number, maxRows: number, usage: Usage, plan: Plan = 'max'): Layout => {
+  const blockLabels = labelsFor(usage, plan)
+  const fit = { ...lineFit(usage, blockLabels, columns), blockLabels }
+  const blockColumns = STATS_BLOCK_COLUMNS + labelColumns(blockLabels) - SHORT_LABEL_COLUMNS
   const hasSceneRows = maxRows >= SCENE_ROWS + 1
-  const besideColumns = columns - GAP - STATS_BLOCK_COLUMNS
+  const besideColumns = columns - GAP - blockColumns
 
   if (hasSceneRows && besideColumns >= MIN_SCENE_COLUMNS) {
     const barCells = Math.min(MAX_BAR_CELLS, BAR_CELLS + Math.max(0, besideColumns - MAX_SCENE_COLUMNS))
@@ -114,7 +151,7 @@ export const layoutFor = (columns: number, maxRows: number, usage: Usage): Layou
       ...fit,
       sceneWidth: sceneWidth(besideColumns),
       isStatsBeside: true,
-      statsColumns: STATS_BLOCK_COLUMNS + barCells - BAR_CELLS,
+      statsColumns: blockColumns + barCells - BAR_CELLS,
       barCells,
       below: ['caption'],
     }

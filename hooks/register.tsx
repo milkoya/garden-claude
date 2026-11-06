@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
-import type { Condition, Detected, Garden, Job, Language, Member, Prefs, Room, Usage, UsageWindow, Weather } from '../types'
+import type { Condition, Detected, Garden, Job, Language, Member, Plan, Prefs, Room, Usage, Weather } from '../types'
 import {
   ACCESSORIES,
   RESTING,
@@ -35,11 +35,14 @@ import {
   displayWidth,
   fitBadge,
   fitCaption,
+  labelColumns,
   layoutFor,
   lineText,
   modelText,
   readingsOf,
+  windowFor,
 } from './layout'
+import type { Label } from './layout'
 import { cityForZone } from './places'
 import type { City } from './places'
 import {
@@ -70,7 +73,7 @@ import {
   withMember,
   withoutMember,
 } from './room'
-import { barCells, emptyUsage, formatReset, prettyModel, windowOf } from './stats'
+import { PLANS, accountOf, barCells, emptyUsage, formatReset, parsePlan, planFor, planName, prettyModel, windowOf } from './stats'
 import type { Pace } from './garden'
 import { WEATHER_REFRESH_MS, parseCondition, parseIsNight, weatherUrl } from './weather'
 
@@ -99,6 +102,10 @@ const LANGUAGE_PANE = 'garden-claude-language'
 const ROOM_COMMAND = 'garden-claude-room'
 const ACCESSORY_COMMAND = 'garden-claude-accessory'
 const ACCESSORY_PANE = 'garden-claude-accessory'
+const PLAN_COMMAND = 'garden-claude-plan'
+const PLAN_PANE = 'garden-claude-plan'
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+const ACCOUNT_REFRESH_MS = 5 * 60_000
 const FRAME_MS = 200
 const CLOCK_MS = 60_000
 const ASLEEP_MS = 30_000
@@ -146,6 +153,8 @@ let wasOnDuty: boolean | undefined
 let choreKey: string | undefined
 let choreFrame = 0
 let queue: Promise<unknown> = Promise.resolve()
+let accountAskedAt = Number.NEGATIVE_INFINITY
+let isAskingAccount = false
 const otherX = new Map<string, number>()
 const otherFacing = new Map<string, number>()
 const paces = new Map<string, Pace>()
@@ -157,7 +166,8 @@ const loadPrefs = (value: unknown): Prefs | null => {
   const saved = value as Partial<Prefs> | null
   if (typeof saved !== 'object' || saved === null) return null
   const language = typeof saved.language === 'string' ? parseLanguage(saved.language) : null
-  return { language: language ?? 'auto', isMembersHidden: saved.isMembersHidden === true }
+  const plan = typeof saved.plan === 'string' ? parsePlan(saved.plan) : null
+  return { language: language ?? 'auto', isMembersHidden: saved.isMembersHidden === true, plan: plan ?? 'auto' }
 }
 
 type Seat = { code: string; accessory: number }
@@ -354,6 +364,27 @@ async function measure($: EngineInterface) {
   }))
 }
 
+async function askAccount($: EngineInterface) {
+  const now = await $.clock.now()
+  if (now - accountAskedAt < ACCOUNT_REFRESH_MS) return
+  accountAskedAt = now
+  const authorization = await $.session.authorize()
+  if (authorization?.kind !== 'bearer') return
+  const response = await $.http.fetch(USAGE_URL, { auth: authorization.handle })
+  const account = response.ok ? accountOf(response.text) : null
+  if (account) await update($, usage, current => ({ ...current, ...account }))
+}
+
+async function refreshAccount($: EngineInterface) {
+  if (isAskingAccount) return
+  isAskingAccount = true
+  try {
+    await askAccount($)
+  } finally {
+    isAskingAccount = false
+  }
+}
+
 async function detectedNow($: EngineInterface): Promise<Detected> {
   const locales = [await $.env.get('LC_ALL'), await $.env.get('LANG')]
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -410,6 +441,20 @@ async function toggleMembers($: EngineInterface) {
   const next = await update($, prefs, current => ({ ...current, isMembersHidden: !current.isMembersHidden }))
   await $.store.set(PREFS_KEY, next)
 }
+
+async function choosePlan($: EngineInterface, plan: Plan | 'auto') {
+  const next = await update($, prefs, current => ({ ...current, plan }))
+  await $.store.set(PREFS_KEY, next)
+}
+
+async function pickPlan($: EngineInterface, value: string) {
+  const plan = parsePlan(value)
+  if (plan !== null) await choosePlan($, plan)
+  await $.ui.close({ id: PLAN_PANE })
+}
+
+const planList = (strings: Strings): string =>
+  [strings.supportedPlans, '  auto', ...PLANS.map(({ code }) => `  ${code}: ${strings.planLimits[code]}`)].join('\n')
 
 async function pickLanguage($: EngineInterface, value: string) {
   const language = parseLanguage(value)
@@ -716,6 +761,7 @@ async function startUp($: EngineInterface) {
   await registerCommands($).catch(ignore)
   await update($, started, () => true)
   void refreshWeather($).catch(ignore)
+  void refreshAccount($).catch(ignore)
   startTimers($)
 }
 
@@ -746,6 +792,11 @@ async function registerCommands($: EngineInterface) {
     description: 'Pick what your Claude wears in a room',
     argumentHint: '[sunglasses | headphones | straw hat | flower crown | bunny ears]',
     immediate: true,
+  })
+  await $.command.register({
+    name: PLAN_COMMAND,
+    description: 'Pick which usage limits the stats show: Max or Ultra',
+    argumentHint: '[auto | max | ultra]',
   })
 }
 
@@ -842,6 +893,21 @@ export const register: Register = on => {
     return { text: after.languageSet(languageName(language === 'auto' ? found.language : language)) }
   })
 
+  on('command.run', { command: PLAN_COMMAND }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    await serially(() => ensureStarted($))
+    const strings = await stringsNow($)
+    if (e.args.trim() === '') {
+      if (!isTypedAtTerminal(e)) return { text: planList(strings) }
+      await $.ui.open({ id: PLAN_PANE, title: strings.planTitle, focus: true, closeOnEscape: true, holdToasts: true, rows: PLANS.length + 5 })
+      return {}
+    }
+    const plan = parsePlan(e.args)
+    if (plan === null) return { text: `${strings.unknownPlan(e.args.trim())}\n${planList(strings)}` }
+    await choosePlan($, plan)
+    return { text: strings.planSet(planName(planFor(plan, await read($, usage)))) }
+  })
+
   on('command.run', { command: ROOM_COMMAND }, async ($, e, next) => {
     if (await isOff($)) return next(e)
     const [action = '', ...rest] = e.args.trim().split(/\s+/)
@@ -892,6 +958,7 @@ export const register: Register = on => {
       five: windowOf(e.rateLimits, 'five_hour') ?? current.five,
       week: windowOf(e.rateLimits, 'seven_day') ?? current.week,
     }))
+    void refreshAccount($).catch(ignore)
 
     return next(e)
   })
@@ -957,6 +1024,34 @@ export const register: Register = on => {
     )
   })
 
+  on('ui.render', { component: 'Pane', requestId: PLAN_PANE }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    const chosen = await chosenNow($)
+    const strings = STRINGS[languageOf(chosen, await foundNow($))]
+    if (e.surface !== 'terminal') {
+      const { Text } = $.ui.resolve(e)
+      return <Text>{planList(strings)}</Text>
+    }
+    const { Box, Text, Select } = $.ui.resolve(e)
+    const options = [
+      { value: 'auto', label: strings.autoPlan(planName(planFor('auto', await read($, usage)))) },
+      ...PLANS.map(({ code, name }) => ({ value: code, label: `${name} · ${strings.planLimits[code]}` })),
+    ]
+
+    return (
+      <Box flexDirection="column">
+        <Select
+          key="plan"
+          options={options}
+          value={chosen.plan ?? 'auto'}
+          autoFocus
+          onSelect={(value: string) => void pickPlan($, value).catch(ignore)}
+        />
+        <Text dimColor>{strings.pickHint}</Text>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: ACCESSORY_PANE }, async ($, e, next) => {
     if (await isOff($)) return next(e)
     const strings = await stringsNow($)
@@ -1009,7 +1104,7 @@ export const register: Register = on => {
     isWorking = e.props.isWorking
     const isBusyNow = isWorking || (await read($, choring))
     const columns = e.props.bodyColumns
-    const layout = layoutFor(columns, e.props.maxRows, stats)
+    const layout = layoutFor(columns, e.props.maxRows, stats, planFor(chosen.plan, stats))
     const id = myId ?? ''
     const me = saved ? memberOf(saved, id) : undefined
     const current = saved && me ? saved : null
@@ -1162,20 +1257,24 @@ export const register: Register = on => {
       </Box>
     )
 
-    const limitRow = (label: string, key: string, window: UsageWindow | null) => (
-      <Box flexDirection="row">
-        <Text color={ORANGE}>{label} </Text>
-        {window ? (
-          <Box flexDirection="row">
-            <Raster key={key} columns={layout.barCells} rows={1} cells={barCells(window.percent, layout.barCells)} />
-            <Text>{`${window.percent}%`.padStart(5)}</Text>
-            {window.resetsAt && <Text dimColor> · {formatReset(window.resetsAt, now)}</Text>}
-          </Box>
-        ) : (
-          <Text dimColor>--</Text>
-        )}
-      </Box>
-    )
+    const labelWidth = labelColumns(layout.blockLabels)
+    const limitRow = (label: Label) => {
+      const window = windowFor(stats, label)
+      return (
+        <Box flexDirection="row">
+          <Text color={ORANGE}>{label.padEnd(labelWidth)} </Text>
+          {window ? (
+            <Box flexDirection="row">
+              <Raster key={`${label}-bar`} columns={layout.barCells} rows={1} cells={barCells(window.percent, layout.barCells)} />
+              <Text>{`${window.percent}%`.padStart(5)}</Text>
+              {window.resetsAt && <Text dimColor> · {formatReset(window.resetsAt, now)}</Text>}
+            </Box>
+          ) : (
+            <Text dimColor>--</Text>
+          )}
+        </Box>
+      )
+    }
 
     const statsBlock = (
       <Box flexDirection="column" marginLeft={GAP} marginTop={1}>
@@ -1187,9 +1286,7 @@ export const register: Register = on => {
           {stats.model && <Text bold>{stats.model}</Text>}
           {stats.model && stats.effort && <Text dimColor> · {stats.effort}</Text>}
         </Box>
-        {limitRow('ctx', 'ctx-bar', stats.context === null ? null : { percent: stats.context, resetsAt: null })}
-        {limitRow('5h ', 'five-bar', stats.five)}
-        {limitRow('7d ', 'week-bar', stats.week)}
+        {layout.blockLabels.map(limitRow)}
       </Box>
     )
 

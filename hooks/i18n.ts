@@ -1,4 +1,4 @@
-import type { Condition, Job, Language } from '../types'
+import type { Condition, Job, Language, Plan } from '../types'
 
 export const LANGUAGES: readonly { code: Language; name: string }[] = [
   { code: 'en', name: 'English' },
@@ -28,6 +28,12 @@ export type Strings = {
   languageSet: (name: string) => string
   unknownLanguage: (input: string) => string
   supportedLanguages: string
+  planTitle: string
+  autoPlan: (name: string) => string
+  planLimits: Record<Plan, string>
+  planSet: (name: string) => string
+  unknownPlan: (input: string) => string
+  supportedPlans: string
   badge: { host: string; joined: string; hostAway: string; away: string }
   claude: (seat: number) => string
   host: string
@@ -89,6 +95,12 @@ const ENGLISH: Strings = {
   languageSet: name => `Garden Claude now speaks ${name}.`,
   unknownLanguage: input => `"${input}" isn't a supported language.`,
   supportedLanguages: 'Supported languages:',
+  planTitle: 'Usage limits',
+  autoPlan: name => `Auto (follows your account: ${name})`,
+  planLimits: { max: '5-hour and weekly limits', ultra: 'weekly limits, no 5-hour limit' },
+  planSet: name => `Garden Claude now shows the ${name} plan's usage limits.`,
+  unknownPlan: input => `"${input}" isn't a plan.`,
+  supportedPlans: 'Plans:',
   badge: { host: 'HOST', joined: 'JOINED', hostAway: 'HOST AWAY', away: 'AWAY' },
   claude: seat => `Claude ${seat}`,
   host: 'host',
@@ -148,6 +160,12 @@ const TRADITIONAL: Strings = {
   languageSet: name => `Garden Claude 現在說${name}。`,
   unknownLanguage: input => `不支援「${input}」這個語言。`,
   supportedLanguages: '支援的語言：',
+  planTitle: '用量上限',
+  autoPlan: name => `自動（跟著帳號方案：${name}）`,
+  planLimits: { max: '5 小時與每週上限', ultra: '每週上限，沒有 5 小時上限' },
+  planSet: name => `Garden Claude 現在顯示 ${name} 方案的用量上限。`,
+  unknownPlan: input => `沒有「${input}」這個方案。`,
+  supportedPlans: '方案：',
   badge: { host: '房主', joined: '已加入', hostAway: '房主暫離', away: '暫離' },
   claude: seat => `Claude ${seat}`,
   host: '房主',
@@ -207,6 +225,12 @@ const SIMPLIFIED: Strings = {
   languageSet: name => `Garden Claude 现在说${name}。`,
   unknownLanguage: input => `不支持“${input}”这个语言。`,
   supportedLanguages: '支持的语言：',
+  planTitle: '用量上限',
+  autoPlan: name => `自动（跟随账号套餐：${name}）`,
+  planLimits: { max: '5 小时和每周上限', ultra: '每周上限，没有 5 小时上限' },
+  planSet: name => `Garden Claude 现在显示 ${name} 套餐的用量上限。`,
+  unknownPlan: input => `没有“${input}”这个套餐。`,
+  supportedPlans: '套餐：',
   badge: { host: '房主', joined: '已加入', hostAway: '房主暂离', away: '暂离' },
   claude: seat => `Claude ${seat}`,
   host: '房主',
@@ -266,6 +290,12 @@ const JAPANESE: Strings = {
   languageSet: name => `Garden Claude はこれから${name}で話します。`,
   unknownLanguage: input => `「${input}」には対応していません。`,
   supportedLanguages: '対応言語：',
+  planTitle: '使用量の上限',
+  autoPlan: name => `自動（アカウントのプランに合わせる：${name}）`,
+  planLimits: { max: '5時間と週間の上限', ultra: '週間の上限のみ（5時間の上限なし）' },
+  planSet: name => `Garden Claude は ${name} プランの使用量の上限を表示します。`,
+  unknownPlan: input => `「${input}」というプランはありません。`,
+  supportedPlans: 'プラン：',
   badge: { host: 'ホスト', joined: '参加中', hostAway: 'ホスト不在', away: '不在' },
   claude: seat => `Claude ${seat}`,
   host: 'ホスト',
@@ -325,6 +355,12 @@ const KOREAN: Strings = {
   languageSet: name => `Garden Claude가 이제 ${name}(으)로 말해요.`,
   unknownLanguage: input => `"${input}"은(는) 지원하지 않는 언어예요.`,
   supportedLanguages: '지원 언어:',
+  planTitle: '사용량 한도',
+  autoPlan: name => `자동 (계정 요금제: ${name})`,
+  planLimits: { max: '5시간 및 주간 한도', ultra: '주간 한도만, 5시간 한도 없음' },
+  planSet: name => `Garden Claude가 이제 ${name} 요금제의 사용량 한도를 보여 줘요.`,
+  unknownPlan: input => `"${input}" 요금제는 없어요.`,
+  supportedPlans: '요금제:',
   badge: { host: '방장', joined: '참여 중', hostAway: '방장 부재', away: '부재' },
   claude: seat => `Claude ${seat}`,
   host: '방장',

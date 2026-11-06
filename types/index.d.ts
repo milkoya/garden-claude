@@ -43,15 +43,21 @@ export type Usage = {
   context: number | null
   five: UsageWindow | null
   week: UsageWindow | null
+  fable?: UsageWindow | null
+  hasFiveHour?: boolean | null
   model: string | null
   effort: string | null
 }
+
+export type Account = Required<Pick<Usage, 'fable' | 'hasFiveHour'>>
+
+export type Plan = 'max' | 'ultra'
 
 export type Language = 'en' | 'zh-TW' | 'zh-CN' | 'ja' | 'ko'
 
 export type Condition = 'sunny' | 'cloudy' | 'rainy' | 'snowy'
 
-export type Prefs = { language: Language | 'auto'; isMembersHidden?: boolean }
+export type Prefs = { language: Language | 'auto'; isMembersHidden?: boolean; plan?: Plan | 'auto' }
 
 export type Detected = { language: Language; timeZone: string }
 

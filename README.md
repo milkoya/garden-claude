@@ -68,12 +68,23 @@ Next to the garden sits a little status board:
 
 ```
 $8.70 · Opus 5.5 · high
-ctx ▆▆▆▁▁▁▁▁▁▁  32%
-5h  ▁▁▁▁▁▁▁▁▁▁   1% · 4h25m
-7d  ▆▆▆▁▁▁▁▁▁▁  34% · 2d23h
+ctx   ▆▆▆▁▁▁▁▁▁▁  32%
+5h    ▁▁▁▁▁▁▁▁▁▁   1% · 4h25m
+7d    ▆▆▆▁▁▁▁▁▁▁  34% · 2d23h
+fable ▆▁▁▁▁▁▁▁▁▁   7% · 2d23h
 ```
 
-That's the session cost, the model and its effort level, how full the context is, and your 5-hour and 7-day usage with time until each resets. The bars turn from green to gold at 70% and to red at 90%.
+That's the session cost, the model and its effort level, how full the context is, and your 5-hour and 7-day usage with time until each resets. If your plan has its own weekly limit for Fable, it gets a `fable` row too. The bars turn from green to gold at 70% and to red at 90%.
+
+**Max or Ultra?** The Ultra plan has no 5-hour limit, so on Ultra the board leaves out the `5h` row. Garden Claude reads which kind of plan you have from your account's usage, so there's nothing to set up. To pick by hand:
+
+```
+/garden-claude-plan
+```
+
+Pick from the list, or type it directly, like `/garden-claude-plan ultra`. Use `auto` to follow your account again.
+
+The `fable` row and the plan come from the same numbers `/usage` shows. They're checked when Garden Claude starts and at most every 5 minutes while Claude works.
 
 The board isn't pixel art like the garden: it's regular terminal text with chunky block bars, so the numbers stay easy to read.
 
@@ -124,7 +135,8 @@ Pick from the list, or type it directly, like `/garden-claude-language zh-TW`. U
 Garden Claude keeps things gentle:
 
 - **No location tracking.** It never looks up your IP address or asks where you are. "Auto" only reads your computer's time zone, right on your machine.
-- **One small request.** When it starts and every 30 minutes after, it asks [Open-Meteo](https://open-meteo.com), a free public weather service, for the weather at your time zone's location. Like any website, Open-Meteo sees that a request came in, but nothing else about you is sent.
+- **One small weather request.** When it starts and every 30 minutes after, it asks [Open-Meteo](https://open-meteo.com), a free public weather service, for the weather at your time zone's location. Like any website, Open-Meteo sees that a request came in, but nothing else about you is sent.
+- **Your usage, from Anthropic.** For the `fable` row and the Max or Ultra board, it asks Anthropic for your account's usage, the same numbers `/usage` shows, when it starts and at most every 5 minutes while Claude works. Claude Code signs that request itself, so Garden Claude never sees your login.
 - **Your language stays local.** It's read from your computer and never sent anywhere.
 - **Saved on your machine.** Your coins, settings and rooms are stored by Claude Code on your computer only. Rooms connect sessions through that same local store, never over the network.
 
@@ -153,8 +165,8 @@ Start a new Claude Code session and your garden appears above the prompt.
 - Garden Claude runs only in the **Claude Code CLI**. In a session that didn't start in a terminal, like one in the desktop app, it switches itself off: no garden, no commands, no chores.
 - When the desktop app or your phone joins a terminal session through Remote Control, the garden stays in your terminal. The other screen shows Claude Code's usual view, and commands typed there answer in text instead of opening a picker.
 - It fits itself to your window:
-  - **87+ columns:** the garden with the stats board beside it; on wide windows the bars stretch out
-  - **56–86 columns:** the garden with a one-line stats bar underneath
+  - **87+ columns** (89+ with the `fable` row): the garden with the stats board beside it; on wide windows the bars stretch out
+  - **56+ columns:** the garden with a one-line stats bar underneath
   - **Smaller:** just the stats and caption, as text
   - When space is tight, the caption drops the accessory and city first, so what Claude is doing always shows
 - Collapse the band anytime with `ctrl+x ctrl+a`.
@@ -170,7 +182,7 @@ Start a new Claude Code session and your garden appears above the prompt.
 | `hooks/weather.ts` | Turning Open-Meteo's forecast into sunny, cloudy, rainy or snowy |
 | `hooks/room.ts` | Rooms: codes, seats, who's away, and who's busy with which flower |
 | `hooks/layout.ts` | How the band fits different window sizes |
-| `hooks/stats.ts` | The status board's bars and numbers |
+| `hooks/stats.ts` | The status board's bars and numbers, the plans, and reading your account's usage |
 | `hooks/register.tsx` | The hooks, commands and pickers that connect it all to Claude Code |
 
 Check your changes with:
