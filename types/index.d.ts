@@ -51,6 +51,8 @@ export type Usage = {
 
 export type Account = Required<Pick<Usage, 'fable' | 'hasFiveHour'>>
 
+export type SavedAccount = Account & { fetchedAt: number }
+
 export type Plan = 'max' | 'ultra'
 
 export type Language = 'en' | 'zh-TW' | 'zh-CN' | 'ja' | 'ko'

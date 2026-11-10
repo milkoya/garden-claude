@@ -1,5 +1,5 @@
-import type { Account, Plan, Usage, UsageWindow } from '../types'
-import { toBase64 } from './garden'
+import type { Account, Plan, SavedAccount, Usage, UsageWindow } from '../types'
+import { HOUR, toBase64 } from './garden'
 
 export const BAR_CELLS = 10
 const BLOCK = 0x2586
@@ -107,11 +107,46 @@ const bodyOf = (text: string): Record<string, unknown> | null => {
 
 export const accountOf = (text: string): Account | null => {
   const body = bodyOf(text)
-  if (body === null) return null
-  const limits = Array.isArray(body.limits) ? body.limits : []
-  const fable = limits.find(isFableLimit)
+  if (body === null || !Array.isArray(body.limits)) return null
+  const fable = body.limits.find(isFableLimit)
   return {
     fable: fable && typeof fable.percent === 'number' ? { percent: Math.round(fable.percent), resetsAt: resetOf(fable.resets_at) } : null,
     hasFiveHour: 'five_hour' in body ? body.five_hour !== null : null,
   }
 }
+
+const savedWindow = (value: unknown): UsageWindow | null => {
+  const saved = value as Partial<UsageWindow> | null
+  if (typeof saved !== 'object' || saved === null || typeof saved.percent !== 'number') return null
+  return { percent: saved.percent, resetsAt: typeof saved.resetsAt === 'string' ? saved.resetsAt : null }
+}
+
+const WEEK_MS = 7 * 24 * HOUR
+
+const resetTime = (window: UsageWindow): number => Date.parse(window.resetsAt ?? '')
+
+const isShowable = (window: UsageWindow, fetchedAt: number, now: number): boolean =>
+  Number.isNaN(resetTime(window)) ? now - fetchedAt < WEEK_MS : resetTime(window) > now
+
+export const loadAccount = (value: unknown): SavedAccount | null => {
+  const saved = value as Partial<SavedAccount> | null
+  if (typeof saved !== 'object' || saved === null || typeof saved.fetchedAt !== 'number') return null
+  return {
+    fable: savedWindow(saved.fable),
+    hasFiveHour: typeof saved.hasFiveHour === 'boolean' ? saved.hasFiveHour : null,
+    fetchedAt: saved.fetchedAt,
+  }
+}
+
+export const hasLapsed = (reading: SavedAccount, now: number): boolean =>
+  reading.fable !== null && !isShowable(reading.fable, reading.fetchedAt, now)
+
+export const liveReading = (reading: SavedAccount, now: number): Account => ({
+  fable: hasLapsed(reading, now) ? null : reading.fable,
+  hasFiveHour: reading.hasFiveHour,
+})
+
+export const replyOverSaved = (saved: Account | null, reply: Account): Account => ({
+  fable: reply.fable,
+  hasFiveHour: reply.hasFiveHour ?? saved?.hasFiveHour ?? null,
+})

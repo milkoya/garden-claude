@@ -1,7 +1,22 @@
 import { atom, read, update } from 'claude-code'
 import type { CommandRunInput, EngineInterface, Register } from 'claude-code'
 
-import type { Condition, Detected, Garden, Job, Language, Member, Plan, Prefs, Room, Usage, Weather } from '../types'
+import type {
+  Account,
+  Condition,
+  Detected,
+  Garden,
+  Job,
+  Language,
+  Member,
+  Plan,
+  Prefs,
+  Room,
+  SavedAccount,
+  Usage,
+  UsageWindow,
+  Weather,
+} from '../types'
 import {
   ACCESSORIES,
   RESTING,
@@ -73,7 +88,22 @@ import {
   withMember,
   withoutMember,
 } from './room'
-import { PLANS, accountOf, barCells, emptyUsage, formatReset, parsePlan, planFor, planName, prettyModel, windowOf } from './stats'
+import {
+  PLANS,
+  accountOf,
+  barCells,
+  emptyUsage,
+  formatReset,
+  loadAccount,
+  parsePlan,
+  planFor,
+  planName,
+  prettyModel,
+  hasLapsed,
+  liveReading,
+  replyOverSaved,
+  windowOf,
+} from './stats'
 import type { Pace } from './garden'
 import { WEATHER_REFRESH_MS, parseCondition, parseIsNight, weatherUrl } from './weather'
 
@@ -97,6 +127,7 @@ const OLD_GARDEN_KEY = 'garden'
 const COINS_KEY = 'coins'
 const TODAY_KEY = 'today'
 const PREFS_KEY = 'prefs'
+const ACCOUNT_KEY = 'account'
 const LANGUAGE_COMMAND = 'garden-claude-language'
 const LANGUAGE_PANE = 'garden-claude-language'
 const ROOM_COMMAND = 'garden-claude-room'
@@ -105,7 +136,8 @@ const ACCESSORY_PANE = 'garden-claude-accessory'
 const PLAN_COMMAND = 'garden-claude-plan'
 const PLAN_PANE = 'garden-claude-plan'
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
-const ACCOUNT_REFRESH_MS = 5 * 60_000
+const ACCOUNT_CHECK_MS = 60_000
+const READING_TTL_MS = 5 * 60_000
 const FRAME_MS = 200
 const CLOCK_MS = 60_000
 const ASLEEP_MS = 30_000
@@ -153,7 +185,8 @@ let wasOnDuty: boolean | undefined
 let choreKey: string | undefined
 let choreFrame = 0
 let queue: Promise<unknown> = Promise.resolve()
-let accountAskedAt = Number.NEGATIVE_INFINITY
+let accountCheckedAt = Number.NEGATIVE_INFINITY
+let fetchTriedAt = Number.NEGATIVE_INFINITY
 let isAskingAccount = false
 const otherX = new Map<string, number>()
 const otherFacing = new Map<string, number>()
@@ -364,15 +397,51 @@ async function measure($: EngineInterface) {
   }))
 }
 
+const isSameWindow = (shown: UsageWindow | null | undefined, next: UsageWindow | null): boolean =>
+  shown?.percent === next?.percent && shown?.resetsAt === next?.resetsAt
+
+async function showAccount($: EngineInterface, account: Account) {
+  await update($, usage, current =>
+    isSameWindow(current.fable, account.fable) && current.hasFiveHour === account.hasFiveHour
+      ? current
+      : { ...current, fable: account.fable, hasFiveHour: account.hasFiveHour },
+  )
+}
+
+async function bearerHandle($: EngineInterface): Promise<string | null> {
+  const authorization = await $.session.authorize()
+  return authorization?.kind === 'bearer' ? authorization.handle : null
+}
+
+async function loadSavedAccount($: EngineInterface): Promise<SavedAccount | null> {
+  return loadAccount(await $.store.get(ACCOUNT_KEY))
+}
+
+async function restoreAccount($: EngineInterface, now: number) {
+  if ((await bearerHandle($)) === null) return
+  const saved = await loadSavedAccount($)
+  if (saved) await showAccount($, liveReading(saved, now))
+}
+
+const isWithin = (span: number, at: number, now: number): boolean => at <= now && now - at < span
+
 async function askAccount($: EngineInterface) {
   const now = await $.clock.now()
-  if (now - accountAskedAt < ACCOUNT_REFRESH_MS) return
-  accountAskedAt = now
-  const authorization = await $.session.authorize()
-  if (authorization?.kind !== 'bearer') return
-  const response = await $.http.fetch(USAGE_URL, { auth: authorization.handle })
-  const account = response.ok ? accountOf(response.text) : null
-  if (account) await update($, usage, current => ({ ...current, ...account }))
+  if (isWithin(ACCOUNT_CHECK_MS, accountCheckedAt, now)) return
+  accountCheckedAt = now
+  const handle = await bearerHandle($)
+  if (handle === null) return
+  const saved = await loadSavedAccount($)
+  if (saved) await showAccount($, liveReading(saved, now))
+  const isSavedFresh = saved !== null && !hasLapsed(saved, now) && isWithin(READING_TTL_MS, saved.fetchedAt, now)
+  if (isSavedFresh || isWithin(READING_TTL_MS, fetchTriedAt, now)) return
+  fetchTriedAt = now
+  const response = await $.http.fetch(USAGE_URL, { auth: handle })
+  const reply = response.ok ? accountOf(response.text) : null
+  if (!reply) return
+  const reading = { ...replyOverSaved(saved, reply), fetchedAt: await $.clock.now() }
+  await $.store.set(ACCOUNT_KEY, reading)
+  await showAccount($, liveReading(reading, reading.fetchedAt))
 }
 
 async function refreshAccount($: EngineInterface) {
@@ -758,6 +827,7 @@ async function startUp($: EngineInterface) {
   await rejoinAtStart($, now).catch(ignore)
   await refreshClock($).catch(ignore)
   await measure($).catch(ignore)
+  await restoreAccount($, now).catch(ignore)
   await registerCommands($).catch(ignore)
   await update($, started, () => true)
   void refreshWeather($).catch(ignore)
@@ -868,6 +938,7 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
+    if (e.reason === 'logout') await $.store.delete(ACCOUNT_KEY).catch(ignore)
     if (await isOff($)) return next(e)
     const seat = await read($, membership)
     if (seat && e.reason === 'clear') isClearing = true

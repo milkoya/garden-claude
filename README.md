@@ -84,7 +84,7 @@ That's the session cost, the model and its effort level, how full the context is
 
 Pick from the list, or type it directly, like `/garden-claude-plan ultra`. Use `auto` to follow your account again.
 
-The `fable` row and the plan come from the same numbers `/usage` shows. They're checked when Garden Claude starts and at most every 5 minutes while Claude works.
+The `fable` row and the plan come from the same numbers `/usage` shows. They're checked at most every 5 minutes while Claude works, and the last reading is saved and shared by all your sessions, so the row stays put through a new session, a `/clear` or a moment the account can't be reached. When the Fable week resets, the old reading is dropped and the new week's is fetched right away; the row is left out only while that can't be reached. Logging out forgets the saved reading, and sessions signed in with an API key or a cloud provider show none.
 
 The board isn't pixel art like the garden: it's regular terminal text with chunky block bars, so the numbers stay easy to read.
 
@@ -136,9 +136,9 @@ Garden Claude keeps things gentle:
 
 - **No location tracking.** It never looks up your IP address or asks where you are. "Auto" only reads your computer's time zone, right on your machine.
 - **One small weather request.** When it starts and every 30 minutes after, it asks [Open-Meteo](https://open-meteo.com), a free public weather service, for the weather at your time zone's location. Like any website, Open-Meteo sees that a request came in, but nothing else about you is sent.
-- **Your usage, from Anthropic.** For the `fable` row and the Max or Ultra board, it asks Anthropic for your account's usage, the same numbers `/usage` shows, when it starts and at most every 5 minutes while Claude works. Claude Code signs that request itself, so Garden Claude never sees your login.
+- **Your usage, from Anthropic.** For the `fable` row and the Max or Ultra board, it asks Anthropic for your account's usage, the same numbers `/usage` shows, while Claude works: at most once every 5 minutes in each session, skipped while another session's reading is under 5 minutes old, and right away when the Fable week resets. Claude Code signs that request itself, so Garden Claude never sees your login.
 - **Your language stays local.** It's read from your computer and never sent anywhere.
-- **Saved on your machine.** Your coins, settings and rooms are stored by Claude Code on your computer only. Rooms connect sessions through that same local store, never over the network.
+- **Saved on your machine.** Your coins, settings, rooms and last usage reading are stored by Claude Code on your computer only. Rooms connect sessions through that same local store, never over the network.
 
 ## 🌱 Install
 

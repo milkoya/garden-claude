@@ -37,7 +37,19 @@ import {
   work,
 } from '../hooks/garden'
 import type { Pace, Scene } from '../hooks/garden'
-import { BAR_CELLS, accountOf, barCells, formatReset, parsePlan, planFor, prettyModel } from '../hooks/stats'
+import {
+  BAR_CELLS,
+  accountOf,
+  barCells,
+  formatReset,
+  loadAccount,
+  parsePlan,
+  planFor,
+  prettyModel,
+  hasLapsed,
+  liveReading,
+  replyOverSaved,
+} from '../hooks/stats'
 import {
   CAPTION_SEPARATOR,
   GAP,
@@ -104,6 +116,7 @@ const BAND = {
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
+    isCollapsed: false,
     isWorking: true,
     maxRows: 20,
     bodyColumns: 120,
@@ -340,6 +353,34 @@ describe('the stats', () => {
     expect(accountOf(JSON.stringify(sonnetOnly))).toEqual({ fable: null, hasFiveHour: null })
     expect(accountOf('Bad gateway')).toBeNull()
     expect(accountOf('[]')).toBeNull()
+    expect(accountOf(JSON.stringify({ five_hour: null }))).toBeNull()
+  })
+
+  test('takes the Fable reading from every answer and shows a saved one until its week resets', async () => {
+    const now = Date.parse('2026-11-10T00:00:00Z')
+    const fable = { percent: 19, resetsAt: '2026-11-15T20:00:00Z' }
+    const saved = { fable, hasFiveHour: false }
+    const silent = { fable: null, hasFiveHour: null }
+    expect(replyOverSaved(saved, silent)).toEqual({ fable: null, hasFiveHour: false })
+    expect(replyOverSaved(saved, { fable: { percent: 21, resetsAt: fable.resetsAt }, hasFiveHour: true })).toEqual({
+      fable: { percent: 21, resetsAt: fable.resetsAt },
+      hasFiveHour: true,
+    })
+    expect(replyOverSaved(null, silent)).toEqual(silent)
+    const reading = { ...saved, fetchedAt: now }
+    expect(liveReading(reading, now)).toEqual(saved)
+    expect(liveReading(reading, Date.parse(fable.resetsAt))).toEqual({ fable: null, hasFiveHour: false })
+    expect(hasLapsed(reading, now)).toBe(false)
+    expect(hasLapsed(reading, Date.parse(fable.resetsAt))).toBe(true)
+    expect(hasLapsed({ ...reading, fable: null }, Date.parse(fable.resetsAt))).toBe(false)
+    const noReset = { fable: { percent: 19, resetsAt: null }, hasFiveHour: false, fetchedAt: now }
+    expect(liveReading(noReset, now + HOUR).fable).toEqual(noReset.fable)
+    expect(liveReading(noReset, now + 7 * 24 * HOUR).fable).toBeNull()
+    expect(liveReading({ ...noReset, fable: { percent: 19, resetsAt: 'soon' } }, now).fable).toEqual({ percent: 19, resetsAt: 'soon' })
+    expect(loadAccount(reading)).toEqual(reading)
+    expect(loadAccount({ fable: { percent: '19' }, hasFiveHour: 'no', fetchedAt: now })).toEqual({ ...silent, fetchedAt: now })
+    expect(loadAccount(saved)).toBeNull()
+    expect(loadAccount(undefined)).toBeNull()
   })
 
   test('follows the account on auto and keeps a plan picked by hand', async () => {
@@ -795,6 +836,144 @@ describe('starting a session', () => {
     expect(await band.find({ type: 'Text', text: /^7d / })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /^5h / })).toBeUndefined()
     await band.unmount()
+  })
+
+  const STARTED_AT = 490_000 * HOUR
+  const SAVED_FABLE = { percent: 19, resetsAt: new Date(STARTED_AT + 72 * HOUR).toISOString() }
+
+  const RATE_LIMITED = { ok: false, status: 429, text: 'rate limited' }
+
+  type AccountWorld = {
+    fetchedAt: number
+    answer?: { ok: boolean; status: number; text: string }
+    fable?: { percent: number; resetsAt: string }
+    kind?: 'bearer' | 'api-key'
+  }
+
+  const accountWorld = (on: On, { fetchedAt, answer = RATE_LIMITED, fable = SAVED_FABLE, kind = 'bearer' }: AccountWorld) => {
+    const clock = mock.clock(on, { now: STARTED_AT })
+    const store = sharedStore(on, { account: { fable, hasFiveHour: false, fetchedAt } })
+    mock.env(on, { LANG: 'en_US.UTF-8' })
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+    on('session.id', () => ({ value: 'session-a' }))
+    on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    on('session.authorize', () => ({ value: { handle: 'held-credential', kind } }))
+    const asked: string[] = []
+    on('http.fetch', ($, e) => {
+      if (!e.url.startsWith('https://api.anthropic.com/')) return { deny: 'offline' }
+      asked.push(e.url)
+      return { value: { ...answer, headers: {} } }
+    })
+    return { clock, store, asked }
+  }
+
+  const fableShown = async ($: Engine, percent = /19%/) => {
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const shown = {
+      fable: (await band.find({ type: 'Text', text: /^fable / })) !== undefined,
+      percent: (await band.find({ type: 'Text', text: percent })) !== undefined,
+      fiveHour: (await band.find({ type: 'Text', text: /^5h / })) !== undefined,
+    }
+    await band.unmount()
+    return shown
+  }
+
+  const ULTRA_ANSWER = { ok: true, status: 200, text: JSON.stringify(ULTRA_ACCOUNT) }
+
+  test('shows the saved Fable reading when the account cannot be reached', async ($, on) => {
+    const { clock, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 10 * 60_000 })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toHaveLength(1)
+    expect(await fableShown($)).toEqual({ fable: true, percent: true, fiveHour: false })
+  })
+
+  test('uses a reading another session saved minutes ago without asking again', async ($, on) => {
+    const { clock, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 60_000, answer: ULTRA_ANSWER })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toEqual([])
+    expect(await fableShown($)).toEqual({ fable: true, percent: true, fiveHour: false })
+  })
+
+  test('shows no saved reading in a session without an account login', async ($, on) => {
+    const { clock, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 60_000, kind: 'api-key' })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toEqual([])
+    expect(await fableShown($)).toEqual({ fable: false, percent: false, fiveHour: true })
+  })
+
+  test('asks again when the saved reading is stamped after now', async ($, on) => {
+    const { clock, asked } = accountWorld(on, { fetchedAt: STARTED_AT + HOUR })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toHaveLength(1)
+  })
+
+  test('drops a saved Fable reading once its week has reset', async ($, on) => {
+    const lastWeek = { percent: 19, resetsAt: new Date(STARTED_AT - HOUR).toISOString() }
+    const { clock } = accountWorld(on, { fetchedAt: STARTED_AT - 2 * HOUR, fable: lastWeek })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(await fableShown($)).toEqual({ fable: false, percent: false, fiveHour: false })
+  })
+
+  test('asks for the new week right away even when the saved reading is fresh', async ($, on) => {
+    const lastWeek = { percent: 19, resetsAt: new Date(STARTED_AT - 1_000).toISOString() }
+    const { clock, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 60_000, fable: lastWeek, answer: ULTRA_ANSWER })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toHaveLength(1)
+    expect(await fableShown($, /7%/)).toEqual({ fable: true, percent: true, fiveHour: false })
+  })
+
+  test('drops the Fable row when the account answers that it has no Fable limit', async ($, on) => {
+    const answer = { ok: true, status: 200, text: JSON.stringify({ five_hour: null, limits: [] }) }
+    const { clock, store, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 10 * 60_000, answer })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toHaveLength(1)
+    expect(store.get('account')).toEqual({ fable: null, hasFiveHour: false, fetchedAt: STARTED_AT })
+    expect(await fableShown($)).toEqual({ fable: false, percent: false, fiveHour: false })
+  })
+
+  test('keeps the saved Fable row when the answer says nothing about limits', async ($, on) => {
+    const answer = { ok: true, status: 200, text: JSON.stringify({ five_hour: null }) }
+    const { clock, store, asked } = accountWorld(on, { fetchedAt: STARTED_AT - 10 * 60_000, answer })
+
+    await $.session.start(START)
+    await clock.settle()
+
+    expect(asked).toHaveLength(1)
+    expect(store.get('account')).toEqual({ fable: SAVED_FABLE, hasFiveHour: false, fetchedAt: STARTED_AT - 10 * 60_000 })
+    expect(await fableShown($)).toEqual({ fable: true, percent: true, fiveHour: false })
+  })
+
+  test('forgets the saved reading on logout so the next account starts fresh', async ($, on) => {
+    const { clock, store } = accountWorld(on, { fetchedAt: STARTED_AT - 60_000 })
+
+    await $.session.start(START)
+    await clock.settle()
+    await $.session.end({ reason: 'logout', sessionId: 'session-a', resume: { id: 'session-a' } })
+
+    expect(store.has('account')).toBe(false)
   })
 
   test('guesses the language from the time zone when the computer gives none', async ($, on) => {
