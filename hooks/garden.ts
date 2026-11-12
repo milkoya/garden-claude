@@ -251,21 +251,27 @@ const DEFAULT = 0x01000000
 const ORANGE = 0xd97757
 const EYE = 0x2b1d17
 const GRASS = 0x5a9e3e
+const GRASS_LIGHT = 0x74b84e
 const TILLED = 0x5c3b22
 const SOIL = 0x7a4f2e
+const SOIL_DARK = 0x684223
 const STEM = 0x4caf50
 const LEAF = 0x7ccf5a
 const SEED = 0x8a5a33
+const SEED_SPECK = 0xe6cf9a
 const WOOD = 0x8b5a2b
-const COUNTER = 0xa0703c
+const WOOD_DARK = 0x6e4520
+const COUNTER = 0xb98a4e
 const AWNING = [0xd94f4f, 0xece2d0] as const
+const AWNING_SHADE = 0xb23a3a
 const GOLD = 0xf2c84b
 const WATER = 0x4fa3e0
 const PINK = 0xf4a3b5
 const HOT_PINK = 0xc94f7c
 const BUNNY = 0xf8f4ee
 const SHADES = 0x15151c
-const CAN = 0x7f97a8
+const CAN = 0xb9bdc6
+const CAN_DARK = 0x868b96
 const STALL_COLUMNS = 11
 const FIRST_PLOT = 16
 const BODY_TOP = 4
@@ -413,10 +419,18 @@ const span = ({ set }: Canvas, from: number, to: number, y: number, color: numbe
   for (let x = from; x <= to; x += 1) set(x, y, color)
 }
 
+const isNearPlot = (x: number, width: number, reach: number): boolean =>
+  Array.from({ length: PLOT_COUNT }, (_, plot) => plotX(plot, width)).some(at => Math.abs(at - x) <= reach)
+
 const paintGround = (c: Canvas) => {
-  span(c, 0, c.width - 1, 10, GRASS)
-  span(c, 0, c.width - 1, 11, SOIL)
   const half = plotX(1, c.width) - plotX(0, c.width) >= 6 ? 2 : 1
+  for (let x = 0; x < c.width; x += 1) {
+    c.set(x, 10, scramble(x * 13 + 1) % 4 === 0 ? GRASS_LIGHT : GRASS)
+    c.set(x, 11, scramble(x * 29 + 7) % 5 === 0 ? SOIL_DARK : SOIL)
+  }
+  for (let x = 1; x < basketX(c.width) - 1; x += 1) {
+    if (scramble(x * 17 + 3) % 6 === 0 && !isNearPlot(x, c.width, half + 1)) c.set(x, 9, GRASS)
+  }
   for (let plot = 0; plot < PLOT_COUNT; plot += 1) {
     span(c, plotX(plot, c.width) - half, plotX(plot, c.width) + half, 10, TILLED)
   }
@@ -496,17 +510,24 @@ const paintNight = (c: Canvas, frame: number) => {
   paintMoon(c)
 }
 
-const paintCloud = (c: Canvas, x: number, y: number, [top, bottom]: readonly [number, number]) => {
-  span(c, x + 1, x + 2, y, top)
-  span(c, x + 4, x + 5, y, top)
-  span(c, x, x + 6, y + 1, bottom)
+const CLOUD_COLUMNS = 9
+
+const paintBigCloud = (c: Canvas, x: number, [top, bottom]: readonly [number, number]) => {
+  span(c, x + 4, x + 6, 0, top)
+  span(c, x + 1, x + 7, 1, top)
+  span(c, x, x + 8, 2, bottom)
+}
+
+const paintSmallCloud = (c: Canvas, x: number, [top, bottom]: readonly [number, number]) => {
+  span(c, x + 1, x + 3, 1, top)
+  span(c, x, x + 5, 2, bottom)
 }
 
 const paintClouds = (c: Canvas, frame: number, colors: readonly [number, number]) => {
   const drift = Math.floor(frame / 4)
-  const lane = c.width + 9
-  paintCloud(c, ((drift + 7) % lane) - 7, 0, colors)
-  paintCloud(c, ((drift + Math.floor(lane / 2)) % lane) - 7, 1, colors)
+  const lane = c.width + CLOUD_COLUMNS + 2
+  paintBigCloud(c, ((drift + CLOUD_COLUMNS) % lane) - CLOUD_COLUMNS, colors)
+  paintSmallCloud(c, ((drift + Math.floor(lane / 2)) % lane) - CLOUD_COLUMNS, colors)
 }
 
 const FALL_ROWS = 7
@@ -555,8 +576,7 @@ const paintSnowCover = (c: Canvas) => {
   for (let x = 0; x < c.width; x += 1) {
     if (x % 7 !== 3) c.set(x, 10, x % 2 === 0 ? SNOW_SHADE : SNOW)
   }
-  const left = stallX(c.width)
-  for (let x = left; x < c.width; x += 2) c.set(x, 2, SNOW)
+  for (let x = stallX(c.width); x < c.width; x += 1) c.under(x, 2, x % 4 === 0 ? SNOW_SHADE : SNOW)
 }
 
 const paintBloom = ({ set }: Canvas, x: number, y: number, flower: Flower) => {
@@ -567,11 +587,35 @@ const paintBloom = ({ set }: Canvas, x: number, y: number, flower: Flower) => {
   set(x, y + 1, flower.petal)
 }
 
+const HEADS: Readonly<Record<Flower['name'], readonly string[]>> = {
+  daisy: ['.p.', 'pcp', '.p.'],
+  tulip: ['p.p', 'ppp', '.c.'],
+  sunflower: ['sps', 'pcp', 'sps'],
+  lavender: ['.p.', 'pc.', '.cp', '.p.'],
+  rose: ['.pp', 'pcp', 'pp.'],
+  cornflower: ['p.p', '.c.', 'p.p'],
+}
+
+const shade = (color: number): number =>
+  [16, 8, 0].reduce((mixed, shift) => mixed | (Math.round(((color >> shift) & 0xff) * 0.78) << shift), 0)
+
+const paintHead = ({ set }: Canvas, x: number, bottom: number, flower: Flower) => {
+  const rows = HEADS[flower.name]
+  const colors: Record<string, number> = { p: flower.petal, c: flower.center, s: shade(flower.petal) }
+  rows.forEach((row, i) =>
+    [...row].forEach((part, dx) => {
+      const color = colors[part]
+      if (color !== undefined) set(x - 1 + dx, bottom - rows.length + 1 + i, color)
+    }),
+  )
+}
+
 const paintPlot = (c: Canvas, plot: Plot, x: number) => {
   const { set } = c
   const flower = flowerOf(plot.kind)
   if (plot.stage === 1) {
     span(c, x - 1, x + 1, 9, SEED)
+    set(x, 9, SEED_SPECK)
     return
   }
   if (plot.stage === 2) {
@@ -589,10 +633,10 @@ const paintPlot = (c: Canvas, plot: Plot, x: number) => {
     return
   }
   if (plot.stage >= BLOOM) {
-    for (let y = 5; y <= 9; y += 1) set(x, y, STEM)
+    for (let y = 4; y <= 9; y += 1) set(x, y, STEM)
     set(x - 1, 8, LEAF)
     set(x + 1, 7, LEAF)
-    paintBloom(c, x, 3, flower)
+    paintHead(c, x, 4, flower)
   }
 }
 
@@ -644,13 +688,16 @@ const paintStall = (c: Canvas, coins: number, frame: number) => {
   for (let x = left; x < width; x += 1) {
     const isRed = (x - left) % 2 === 0
     set(x, 3, isRed ? AWNING[0] : AWNING[1])
-    if (isRed) set(x, 4, AWNING[0])
+    if (isRed) set(x, 4, AWNING_SHADE)
   }
-  for (let y = 5; y <= 9; y += 1) {
+  for (let y = 5; y <= 6; y += 1) {
     set(left + 1, y, WOOD)
     set(width - 2, y, WOOD)
   }
   span(c, left, width - 1, 7, COUNTER)
+  for (let y = 8; y <= 9; y += 1) {
+    for (let x = left + 1; x <= width - 2; x += 1) set(x, y, (x - left) % 3 === 1 ? WOOD_DARK : WOOD)
+  }
   if (coins > 0) set(center, 1 + (frame % 8 < 4 ? 0 : 1), GOLD)
 }
 
@@ -662,6 +709,7 @@ const LEGS = [
 const IDLE_CYCLE = 40
 const CHORE_CYCLE = 6
 const DROP_FRAMES = 6
+const PICK_FRAMES = 3
 const CLOSED_EYE = 0xa9553c
 const NOTE_COLORS = [0xf07fa8, 0x5b8de8, GOLD] as const
 const BUTTERFLY_PATH = [
@@ -703,6 +751,8 @@ const isChoringIn = (actor: Actor): boolean => {
   return actor.job.kind !== 'storing' || since < DROP_FRAMES
 }
 
+const isPicking = (actor: Actor): boolean => (sinceArrival(actor) ?? 0) < PICK_FRAMES
+
 const idlePose = (actor: Actor): Pose => {
   const cycle = actor.frame % IDLE_CYCLE
   const isGrooving = ACCESSORIES[actor.accessory] === 'headphones'
@@ -725,9 +775,7 @@ const chorePose = (actor: Actor): Pose => {
     case 'watering':
       return { ...base, squash: beat >= 3, isBlinking: beat === 5 }
     case 'harvesting':
-      return beat < 3
-        ? { ...base, squash: true }
-        : { ...base, hop: beat === 4 }
+      return isPicking(actor) ? { ...base, squash: true } : { ...base, hop: beat === 4 }
     case 'storing': {
       const since = sinceArrival(actor) ?? 0
       return { ...base, squash: since >= 2 && since < 4 }
@@ -760,10 +808,8 @@ const paintClaude = (c: Canvas, x: number, pose: Pose): number => {
   const arms = head + 2
   for (let y = head; y <= top + 4; y += 1) span(c, x + 1, x + 7, y, ORANGE)
   if (pose.armsUp) {
-    for (const y of [head, head + 1]) {
-      set(x, y, ORANGE)
-      set(x + 8, y, ORANGE)
-    }
+    set(x, head, ORANGE)
+    set(x + 8, head, ORANGE)
   } else {
     set(x, arms, ORANGE)
     set(x + 8, arms, ORANGE)
@@ -773,6 +819,11 @@ const paintClaude = (c: Canvas, x: number, pose: Pose): number => {
   const legs = LEGS[pose.step] ?? LEGS[0]
   legs.forEach(leg => set(x + leg, top + 5, ORANGE))
   return head
+}
+
+const paintRaisedHands = ({ set }: Canvas, x: number, head: number) => {
+  set(x, head - 1, ORANGE)
+  set(x + 8, head - 1, ORANGE)
 }
 
 const blush = ({ set }: Canvas, x: number, head: number) => {
@@ -790,12 +841,13 @@ const bunnyEar = (c: Canvas, left: number, head: number, isFolded: boolean, outw
     span(c, tip, tip + 1, head - 2, BUNNY)
     return
   }
-  for (const y of [head - 3, head - 2]) {
+  const tall = head < BODY_TOP ? 1 : 2
+  for (let y = head - 1 - tall; y <= head - 2; y += 1) {
     set(left, y, BUNNY)
     set(left + 1, y, PINK)
     set(left + 2, y, BUNNY)
   }
-  set(left + 1, head - 4, BUNNY)
+  set(left + 1, head - 2 - tall, BUNNY)
 }
 
 const paintAccessory = (c: Canvas, x: number, head: number, actor: Actor) => {
@@ -849,7 +901,6 @@ const paintAccessory = (c: Canvas, x: number, head: number, actor: Actor) => {
       for (let i = 0; i < CROWN.length; i += 1) {
         set(x + 1 + i, head - 1, CROWN[(i + turn) % CROWN.length] ?? GOLD)
       }
-      if (frame % 4 === 0) set(x + 1 + ((frame * 3) % CROWN.length), head - 2, 0xffffff)
       return
     }
     case 'bunny ears':
@@ -879,20 +930,20 @@ const paintChore = (c: Canvas, actor: Actor, head: number) => {
       return
     }
     case 'watering': {
-      const isTilted = beat >= 3
+      const isPouring = beat >= 3
       span(c, x + 9, x + 10, 6, CAN)
-      span(c, x + 9, x + 10, 7, CAN)
-      set(x + 11, isTilted ? 7 : 6, CAN)
-      if (isTilted) {
+      span(c, x + 9, x + 10, 7, CAN_DARK)
+      set(x + 11, isPouring ? 6 : 5, CAN)
+      if (isPouring) {
         c.under(x + 12, 7 + (frame % 3), WATER)
-        c.under(x + 13, 8 + ((frame + 1) % 2), WATER)
+        c.under(x + 13, 8 + ((frame + 1) % 2), RAIN[1])
       }
       return
     }
     case 'harvesting':
-      if (beat < 3) {
-        set(x + 9, 7, STEM)
-        set(x + 9, 6, flowerOf(job.flower).petal)
+      if (isPicking(actor)) {
+        paintPlot(c, { stage: BLOOM, kind: job.flower, thirst: 0 }, plotX(job.plot, actor.width))
+        span(c, x + 9, x + 10, 7, ORANGE)
       } else paintHeld(c, x + 9, head, job.flower)
       return
     case 'storing':
@@ -909,7 +960,8 @@ const paintChore = (c: Canvas, actor: Actor, head: number) => {
 
 const paintHeld = (c: Canvas, hand: number, head: number, kind: number) => {
   c.set(hand, head + 1, STEM)
-  paintBloom(c, hand, head - 1, flowerOf(kind))
+  c.set(hand, head, STEM)
+  paintHead(c, hand, head, flowerOf(kind))
 }
 
 const handOf = (actor: Actor): number => (actor.facing < 0 ? actor.x - 1 : actor.x + 9)
@@ -978,8 +1030,10 @@ export const paint = (scene: Scene): Uint32Array => {
   if (weather === 'snowy') paintSnowCover(c)
   scene.claudes.forEach(claude => {
     const actor = { ...claude, frame: scene.frame + (claude.phase ?? 0), width: scene.width }
-    const head = paintClaude(c, actor.x, poseFor(actor))
+    const pose = poseFor(actor)
+    const head = paintClaude(c, actor.x, pose)
     paintAccessory(c, actor.x, head, actor)
+    if (pose.armsUp) paintRaisedHands(c, actor.x, head)
     if (isChoringIn(actor)) paintChore(c, actor, head)
     paintCarried(c, actor, head)
   })
