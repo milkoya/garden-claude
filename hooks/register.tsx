@@ -51,6 +51,7 @@ import {
   fitBadge,
   fitCaption,
   labelColumns,
+  labelsFor,
   layoutFor,
   lineText,
   modelText,
@@ -170,6 +171,7 @@ let claudeX: number | undefined
 let facing = 0
 let frame = 0
 let isWorking = false
+let isBandCollapsed = false
 let site: string | undefined
 let shown: View | undefined
 let timers: readonly { cancel: () => void }[] | undefined
@@ -200,7 +202,7 @@ const loadPrefs = (value: unknown): Prefs | null => {
   if (typeof saved !== 'object' || saved === null) return null
   const language = typeof saved.language === 'string' ? parseLanguage(saved.language) : null
   const plan = typeof saved.plan === 'string' ? parsePlan(saved.plan) : null
-  return { language: language ?? 'auto', isMembersHidden: saved.isMembersHidden === true, plan: plan ?? 'auto' }
+  return { language: language ?? 'auto', isMembersHidden: saved.isMembersHidden === true, isMinimized: saved.isMinimized === true, plan: plan ?? 'auto' }
 }
 
 type Seat = { code: string; accessory: number }
@@ -508,6 +510,11 @@ async function chooseLanguage($: EngineInterface, language: Language | 'auto') {
 
 async function toggleMembers($: EngineInterface) {
   const next = await update($, prefs, current => ({ ...current, isMembersHidden: !current.isMembersHidden }))
+  await $.store.set(PREFS_KEY, next)
+}
+
+async function toggleMinimized($: EngineInterface) {
+  const next = await update($, prefs, current => ({ ...current, isMinimized: !current.isMinimized }))
   await $.store.set(PREFS_KEY, next)
 }
 
@@ -1150,6 +1157,15 @@ export const register: Register = on => {
     )
   })
 
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || !isBandCollapsed || (await isOff($))) return next(e)
+    const stats: Usage = await read($, usage)
+    const chosen = await chosenNow($)
+    const mini = lineText(stats, false, labelsFor(stats, planFor(chosen.plan, stats)))
+    const tail = [e.props.tail, mini].filter(Boolean).join(CAPTION_SEPARATOR)
+    return next({ ...e, props: { ...e.props, tail } })
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || e.surface !== 'terminal' || (await isOff($))) return next(e)
     startTimers($)
@@ -1175,7 +1191,15 @@ export const register: Register = on => {
     isWorking = e.props.isWorking
     const isBusyNow = isWorking || (await read($, choring))
     const columns = e.props.bodyColumns
-    const layout = layoutFor(columns, e.props.maxRows, stats, planFor(chosen.plan, stats))
+    const plan = planFor(chosen.plan, stats)
+    const isMinimized = chosen.isMinimized === true
+    const minimizeLabel = isMinimized ? strings.band.expand : strings.band.minimize
+    const minimizeColumns = displayWidth(`[ ${minimizeLabel} ]`) + 1
+    const layout = isMinimized ? layoutFor(columns - minimizeColumns, 1, stats, plan) : layoutFor(columns, e.props.maxRows, stats, plan)
+    if (isBandCollapsed !== e.props.isCollapsed) {
+      isBandCollapsed = e.props.isCollapsed
+      $.ui.invalidate('ui.render')
+    }
     const id = myId ?? ''
     const me = saved ? memberOf(saved, id) : undefined
     const current = saved && me ? saved : null
@@ -1215,7 +1239,7 @@ export const register: Register = on => {
 
     const isMembersHidden = chosen.isMembersHidden === true
     const membersButton = current && me && layout.below.includes('caption') ? (isMembersHidden ? strings.members.show : strings.members.hide) : null
-    const buttonColumns = membersButton === null ? 0 : displayWidth(`[ ${membersButton} ]`) + 1
+    const buttonColumns = (membersButton === null ? 0 : displayWidth(`[ ${membersButton} ]`) + 1) + minimizeColumns
     const sharedParts = current && !isMembersHidden
       ? [
           { text: place, dropOrder: 2 },
@@ -1259,6 +1283,8 @@ export const register: Register = on => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
 
+    const minimizeButton = <Button key="minimize" label={minimizeLabel} variant="primary" onPress={() => toggleMinimized($)} />
+
     const badgeView =
       badge.color === null ? null : (
         <Text color={badge.color} bold>
@@ -1279,6 +1305,8 @@ export const register: Register = on => {
         </Text>
         {membersButton !== null && <Text> </Text>}
         {membersButton !== null && <Button key="members" label={membersButton} variant="primary" onPress={() => toggleMembers($)} />}
+        <Text> </Text>
+        {minimizeButton}
       </Box>
     )
 
@@ -1365,6 +1393,16 @@ export const register: Register = on => {
       shown === undefined ? null : (
         <Raster key={RASTER} columns={shown.width} rows={SCENE_ROWS} cells={sceneCells(sceneOf(shown))} />
       )
+
+    if (isMinimized) {
+      return (
+        <Box flexDirection="row">
+          {statsLine}
+          <Text> </Text>
+          {minimizeButton}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">

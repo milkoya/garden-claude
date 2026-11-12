@@ -551,6 +551,51 @@ describe('the band', () => {
     await band.unmount()
   })
 
+  test('adds the stats to the hint under the prompt while the band is collapsed', async ($, on) => {
+    mock.clock(on, { now: 490_000 * HOUR })
+    mock.store(on)
+    on('ui.render', { component: 'PromptHint' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, null, `HINT ${e.props.tail ?? 'bare'}`) as RenderElement
+    })
+    const HINT = { component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } } as const
+
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    const hint = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...HINT })
+    expect(await hint.find({ type: 'Text', text: 'HINT bare' })).toBeDefined()
+
+    await band.redraw({ ...BAND.props, isCollapsed: true })
+    await hint.redraw(HINT.props)
+    expect(await hint.find({ type: 'Text', text: /^HINT \$/ })).toBeDefined()
+
+    await band.redraw({ ...BAND.props, isCollapsed: false })
+    await hint.redraw(HINT.props)
+    expect(await hint.find({ type: 'Text', text: 'HINT bare' })).toBeDefined()
+    await hint.unmount()
+    await band.unmount()
+  })
+
+  test('shrinks to one line of stats behind a button and grows back', async ($, on) => {
+    mock.clock(on, { now: 490_000 * HOUR })
+    const store = sharedStore(on)
+
+    const band = await $.ui.mount({ plugin: 'garden-claude', surface: 'terminal', ...BAND })
+    expect(await band.find({ key: 'garden' })).toBeDefined()
+
+    await band.press({ key: 'minimize' })
+    expect(await band.find({ key: 'garden' })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /Garden Claude/ })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /\$/ })).toBeDefined()
+    expect((await band.find({ type: 'Button', key: 'minimize' }))?.props.label).toBe(STRINGS.en.band.expand)
+    expect(store.get('prefs')).toMatchObject({ isMinimized: true })
+
+    await band.press({ key: 'minimize' })
+    expect(store.get('prefs')).toMatchObject({ isMinimized: false })
+    await band.redraw(BAND.props)
+    expect(await band.find({ key: 'garden' })).toBeDefined()
+    await band.unmount()
+  })
+
   test('stays out of the way on every surface but the terminal', async ($, on) => {
     mock.clock(on, { now: 490_000 * HOUR })
     mock.store(on)

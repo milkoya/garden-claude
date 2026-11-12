@@ -39,6 +39,7 @@ export type Strings = {
   host: string
   you: string
   members: { hide: string; show: string }
+  band: { minimize: string; expand: string }
   away: string
   roomHelp: string
   aloneStatus: string
@@ -106,6 +107,7 @@ const ENGLISH: Strings = {
   host: 'host',
   you: 'you',
   members: { hide: 'hide members', show: 'show members' },
+  band: { minimize: 'minimize', expand: 'show garden' },
   away: 'away',
   roomHelp: [
     '/garden-claude-room create      start a room and get its code',
@@ -171,6 +173,7 @@ const TRADITIONAL: Strings = {
   host: '房主',
   you: '你',
   members: { hide: '隱藏成員', show: '顯示成員' },
+  band: { minimize: '最小化', expand: '顯示花園' },
   away: '暫離',
   roomHelp: [
     '/garden-claude-room create      開房間並取得房號',
@@ -236,6 +239,7 @@ const SIMPLIFIED: Strings = {
   host: '房主',
   you: '你',
   members: { hide: '隐藏成员', show: '显示成员' },
+  band: { minimize: '最小化', expand: '显示花园' },
   away: '暂离',
   roomHelp: [
     '/garden-claude-room create        开房间，拿到房间号',
@@ -301,6 +305,7 @@ const JAPANESE: Strings = {
   host: 'ホスト',
   you: 'あなた',
   members: { hide: 'メンバーを隠す', show: 'メンバーを表示' },
+  band: { minimize: '最小化', expand: 'ガーデンを表示' },
   away: '不在',
   roomHelp: [
     '/garden-claude-room create         ルームを作ってコードをもらう',
@@ -366,6 +371,7 @@ const KOREAN: Strings = {
   host: '방장',
   you: '나',
   members: { hide: '멤버 숨기기', show: '멤버 보기' },
+  band: { minimize: '최소화', expand: '정원 보기' },
   away: '자리 비움',
   roomHelp: [
     '/garden-claude-room create         방을 만들고 코드 받기',

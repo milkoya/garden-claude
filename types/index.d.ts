@@ -59,7 +59,7 @@ export type Language = 'en' | 'zh-TW' | 'zh-CN' | 'ja' | 'ko'
 
 export type Condition = 'sunny' | 'cloudy' | 'rainy' | 'snowy'
 
-export type Prefs = { language: Language | 'auto'; isMembersHidden?: boolean; plan?: Plan | 'auto' }
+export type Prefs = { language: Language | 'auto'; isMembersHidden?: boolean; isMinimized?: boolean; plan?: Plan | 'auto' }
 
 export type Detected = { language: Language; timeZone: string }
 

@@ -169,7 +169,8 @@ Start a new Claude Code session and your garden appears above the prompt.
   - **56+ columns:** the garden with a one-line stats bar underneath
   - **Smaller:** just the stats and caption, as text
   - When space is tight, the caption drops the accessory and city first, so what Claude is doing always shows
-- Collapse the band anytime with `ctrl+x ctrl+a`.
+- Click `minimize` at the end of the caption to shrink the band to one line of stats; `show garden` brings it back.
+- Collapse the band anytime with `ctrl+x ctrl+a` or its `[-]`. While it's collapsed, the session cost and the `ctx`, `5h`, `7d` and `fable` readings stay on one line under the prompt.
 
 ## 🛠️ Tinkering
 
